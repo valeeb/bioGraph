@@ -5,3 +5,8 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+.pkl
+
+# Local datasets and generated experiment results
+data/
+outputs/results/
