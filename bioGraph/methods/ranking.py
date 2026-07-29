@@ -1,10 +1,11 @@
+"""Network-based disease-gene prioritization methods."""
+
 import logging
 from typing import Dict, Iterable, List, Optional, Sequence, Union
 
 import networkx as nx
 import numpy as np
-from scipy.sparse import csr_matrix, diags
-from scipy.sparse import issparse
+from scipy.sparse import csr_matrix, diags, issparse
 from scipy.sparse.linalg import expm_multiply
 from scipy.stats import hypergeom
 
@@ -24,7 +25,9 @@ def _resolve_seed_nodes(
     """
     if isinstance(seed_input, str):
         if diseases_dict is None:
-            raise ValueError("diseases_dict must be provided when seed_input is a disease name.")
+            raise ValueError(
+                "diseases_dict must be provided when seed_input is a disease name."
+            )
         if seed_input not in diseases_dict:
             raise ValueError(f"Disease '{seed_input}' not found.")
         seed_nodes = list(diseases_dict[seed_input])
@@ -53,11 +56,15 @@ def _seed_indices_from_input(
     diseases_dict: Optional[Dict[str, Iterable]] = None,
 ) -> np.ndarray:
     """Resolve seed input and convert node labels to positional indices."""
-    seed_nodes = _resolve_seed_nodes(G, seed_input=seed_input, diseases_dict=diseases_dict)
+    seed_nodes = _resolve_seed_nodes(
+        G, seed_input=seed_input, diseases_dict=diseases_dict
+    )
     node_to_idx = _build_node_index(nodelist)
     seed_indices = [node_to_idx[node] for node in seed_nodes if node in node_to_idx]
     if len(seed_indices) == 0:
-        raise ValueError("None of the resolved seed nodes are present in the provided nodelist.")
+        raise ValueError(
+            "None of the resolved seed nodes are present in the provided nodelist."
+        )
     return np.asarray(seed_indices, dtype=int)
 
 
@@ -99,23 +106,23 @@ def qa_score(
 
     n = len(nodelist)
     seed_indices = _seed_indices_from_input(
-        G,
-        seed_input=seed_list,
-        nodelist=nodelist,
-        diseases_dict=diseases_dict,
+        G, seed_input=seed_list, nodelist=nodelist, diseases_dict=diseases_dict,
     )
     n_seeds = len(seed_indices)
 
     if H.shape[0] != n or H.shape[1] != n:
         raise ValueError(f"H shape {H.shape} does not match nodelist length {n}.")
 
+    hamiltonian = H
     if isinstance(diag, (float, int)):
-        D = csr_matrix(([diag] * n_seeds, (seed_indices, seed_indices)), shape=(n, n))
-        H += D
+        diagonal = csr_matrix(
+            ([diag] * n_seeds, (seed_indices, seed_indices)), shape=(n, n)
+        )
+        hamiltonian = H + diagonal
 
     Z = np.zeros((n, n_seeds), dtype=int)
     Z[seed_indices, np.arange(n_seeds)] = 1
-    res = expm_multiply(-1j * t * H, Z)
+    res = expm_multiply(-1j * t * hamiltonian, Z)
     res = np.abs(res) ** 2
     return res.sum(axis=1)
 
@@ -153,10 +160,7 @@ def dk_score(
         nodelist = list(G.nodes())
     n = len(nodelist)
     seed_indices = _seed_indices_from_input(
-        G,
-        seed_input=seed_list,
-        nodelist=nodelist,
-        diseases_dict=diseases_dict,
+        G, seed_input=seed_list, nodelist=nodelist, diseases_dict=diseases_dict,
     )
 
     if P is None:
@@ -181,7 +185,7 @@ def neighbourhood_score(
     A: Union[np.ndarray, csr_matrix],
     diseases_dict: Optional[Dict[str, Iterable]] = None,
     nodelist: Optional[Sequence] = None,
-    weighted: str = 'relative'
+    weighted: str = "relative",
 ) -> np.ndarray:
     """Calculate node scores using (un)weighted neighbours.
 
@@ -192,7 +196,8 @@ def neighbourhood_score(
     A: Dense adjacency of G.
     diseases_dict: Disease-to-genes mapping (required if seed_input is str).
     nodelist: Graph node order used by A. Defaults to list(G.nodes()).
-    weighted: If 'relative', normalize by number of seed neighbours. If 'absolute', take absolute number of seed neighbours. If 'both', return both relative and absolute scores.
+    weighted: ``relative`` normalizes by degree, ``absolute`` counts seed
+        neighbours, and ``both`` returns both score vectors.
 
     Returns:
     -------
@@ -204,10 +209,7 @@ def neighbourhood_score(
         nodelist = list(G.nodes())
     n = len(nodelist)
     seed_indices = _seed_indices_from_input(
-        G,
-        seed_input=seed_list,
-        nodelist=nodelist,
-        diseases_dict=diseases_dict,
+        G, seed_input=seed_list, nodelist=nodelist, diseases_dict=diseases_dict,
     )
 
     if A.shape[0] != n or A.shape[1] != n:
@@ -221,24 +223,28 @@ def neighbourhood_score(
     else:
         num_seed_neighbours = np.dot(A, train_seed_mask)
         degrees = np.sum(A, axis=1)
-    if weighted == 'relative':
+    if weighted == "relative":
         scores = num_seed_neighbours / (degrees + 1e-50)
-    elif weighted == 'absolute':
+    elif weighted == "absolute":
         scores = num_seed_neighbours
-    elif weighted == 'both':
+    elif weighted == "both":
         relative_scores = num_seed_neighbours / (degrees + 1e-50)
         absolute_scores = num_seed_neighbours
-        return relative_scores * (1 - train_seed_mask), absolute_scores * (1 - train_seed_mask)
+        return (
+            relative_scores * (1 - train_seed_mask),
+            absolute_scores * (1 - train_seed_mask),
+        )
     else:
-        raise ValueError(f"Invalid value for 'weighted': {weighted}. Must be 'relative', 'absolute', or 'both'.")
-    
+        raise ValueError(
+            f"Invalid weighted value {weighted!r}; expected relative, "
+            "absolute, or both."
+        )
+
     return scores * (1 - train_seed_mask)
 
 
 def normalize_adjacency(
-    G: nx.Graph,
-    A: csr_matrix,
-    nodelist: Optional[Sequence] = None,
+    G: nx.Graph, A: csr_matrix, nodelist: Optional[Sequence] = None,
 ) -> csr_matrix:
     """Compute normalized adjacnecy matrix for RWR.
 
@@ -288,7 +294,8 @@ def rwr_score(
     return_prob: Probability of return to seed nodes.
     normalized_adjacency: D^{-1/2} A D^{-1/2}.
     diseases_dict: Disease-to-genes mapping (required if seed_input is str).
-    nodelist: Graph node order used by normalized_adjacency. Defaults to list(G.nodes()).
+    nodelist: Graph node order used by normalized_adjacency. Defaults to graph
+        node order.
 
     Returns:
     -------
@@ -299,15 +306,13 @@ def rwr_score(
         nodelist = list(G.nodes())
     n = len(nodelist)
     seed_indices = _seed_indices_from_input(
-        G,
-        seed_input=seed_list,
-        nodelist=nodelist,
-        diseases_dict=diseases_dict,
+        G, seed_input=seed_list, nodelist=nodelist, diseases_dict=diseases_dict,
     )
 
     if normalized_adjacency.shape[0] != n or normalized_adjacency.shape[1] != n:
         raise ValueError(
-            f"normalized_adjacency shape {normalized_adjacency.shape} does not match nodelist length {n}."
+            "normalized_adjacency shape "
+            f"{normalized_adjacency.shape} does not match nodelist length {n}."
         )
 
     train_seed_mask = _seed_mask(seed_indices, n)
@@ -338,7 +343,7 @@ def _compare_to_existing(
 def diamond_score(
     G: nx.Graph,
     seed_list: Union[str, Sequence],
-    A: np.ndarray,
+    A: Union[np.ndarray, csr_matrix],
     alpha: float = 5,
     number_to_rank: int = 100,
     diseases_dict: Optional[Dict[str, Iterable]] = None,
@@ -346,11 +351,13 @@ def diamond_score(
 ) -> np.ndarray:
     """Score nodes based on the diamond algorithm.
 
+    Modified from https://github.com/markgolds/qdgp
+
     Args:
     ----
     G: Graph to use.
     seed_list: Disease name or list of seed nodes.
-    A: Dense adjacency of G.
+    A: Dense or sparse adjacency of G.
     alpha: diamond parameter.
     number_to_rank: Score only this many nodes.
     diseases_dict: Disease-to-genes mapping (required if seed_input is str).
@@ -365,10 +372,7 @@ def diamond_score(
         nodelist = list(G.nodes())
     n = len(nodelist)
     seed_indices = _seed_indices_from_input(
-        G,
-        seed_input=seed_list,
-        nodelist=nodelist,
-        diseases_dict=diseases_dict,
+        G, seed_input=seed_list, nodelist=nodelist, diseases_dict=diseases_dict,
     )
 
     if A.shape[0] != n or A.shape[1] != n:
@@ -377,10 +381,12 @@ def diamond_score(
     train_seed_mask = _seed_mask(seed_indices, n)
     assoc_gene_vector = train_seed_mask
     num_genes = assoc_gene_vector.shape[0]
-    edges_per_gene = np.sum(A, axis=0)
+    edges_per_gene = np.asarray(A.sum(axis=0)).ravel()
     scores = np.zeros(assoc_gene_vector.shape)
     seeds = np.copy(assoc_gene_vector)
-    connections_to_seeds = np.sum(A[:, np.nonzero(assoc_gene_vector)[0]], axis=1)
+    connections_to_seeds = np.asarray(
+        A[:, np.nonzero(assoc_gene_vector)[0]].sum(axis=1)
+    ).ravel()
     num_gene_edges = edges_per_gene + (alpha - 1) * connections_to_seeds
     N = num_genes + np.sum(assoc_gene_vector) * (alpha - 1)
     connections_to_seeds = connections_to_seeds * (alpha)
@@ -410,10 +416,7 @@ def diamond_score(
             conn = sf_cache.get(sf_key)
             if conn is None:
                 conn = hypergeom.sf(
-                    cand_seed_conns - 1,
-                    N,
-                    num_seeds,
-                    cand_total_conns,
+                    cand_seed_conns - 1, N, num_seeds, cand_total_conns,
                 )
                 sf_cache[sf_key] = conn
             processed_seed_conns.append(cand_seed_conns)
@@ -421,7 +424,12 @@ def diamond_score(
             if conn < best_conn:
                 best_conn = conn
                 best_cand = cand_index
-        connections_to_seeds += A[:, best_cand]
+        candidate_connections = A[:, best_cand]
+        if issparse(candidate_connections):
+            candidate_connections = candidate_connections.toarray().ravel()
+        else:
+            candidate_connections = np.asarray(candidate_connections).ravel()
+        connections_to_seeds += candidate_connections
         seeds[best_cand] = 1
         scores[best_cand] = 1.0 / index
         num_seeds += 1

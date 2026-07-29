@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import networkx as nx
-import re
+
 
 def load_ppi_graph(path: str | Path) -> nx.Graph:
     """Load the four-column Entrez/symbol PPI file as an undirected graph."""

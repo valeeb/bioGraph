@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import numpy as np
 from typing import Sequence
+
+import numpy as np
 
 
 def split_disease_genes_three_way(
@@ -33,6 +34,7 @@ def split_disease_genes_three_way(
         np.sort(shuffled[n_seeds : n_seeds + n_targets]),
         np.sort(shuffled[n_seeds + n_targets :]),
     )
+
 
 def split_disease_genes(disease_name, split_fraction, diseases_dict, random_state=None):
     """

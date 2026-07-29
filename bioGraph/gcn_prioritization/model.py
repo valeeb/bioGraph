@@ -47,19 +47,21 @@ def make_features(data: GraphData, visible_seed_genes: Sequence[int]) -> torch.T
     """Create exactly two features: constant one and visible-seed indicator."""
 
     seed_feature = torch.zeros(len(data.nodelist), dtype=torch.float32)
-    seed_feature[
-        [data.node_to_index[int(gene)] for gene in visible_seed_genes]
-    ] = 1.0
+    seed_feature[[data.node_to_index[int(gene)] for gene in visible_seed_genes]] = 1.0
     return torch.stack((torch.ones(len(data.nodelist)), seed_feature), dim=1)
 
 
 class GCN(nn.Module):
     """Four-step residual GCN producing one disease logit per node."""
 
-    def __init__(self, in_channels: int = 2, hidden_dim: int = 32, dropout: float = 0.2) -> None:
+    def __init__(
+        self, in_channels: int = 2, hidden_dim: int = 32, dropout: float = 0.2
+    ) -> None:
         super().__init__()
         if in_channels != 2:
-            raise ValueError("This disease-prioritization GCN requires exactly two inputs.")
+            raise ValueError(
+                "This disease-prioritization GCN requires exactly two inputs."
+            )
         self.linear1 = nn.Linear(in_channels, hidden_dim)
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
         self.linear3 = nn.Linear(hidden_dim, hidden_dim)
@@ -76,7 +78,9 @@ class GCN(nn.Module):
             shape = x.shape
             propagated = torch.sparse.mm(adjacency, x.reshape(shape[0], -1))
             return propagated.reshape(shape)
-        raise ValueError("x must have shape [nodes, features] or [nodes, tasks, features].")
+        raise ValueError(
+            "x must have shape [nodes, features] or [nodes, tasks, features]."
+        )
 
     def forward(self, x: torch.Tensor, adjacency: torch.Tensor) -> torch.Tensor:
         # Propagation 1: 2 -> hidden.

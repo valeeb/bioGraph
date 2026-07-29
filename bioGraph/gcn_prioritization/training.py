@@ -10,7 +10,12 @@ from torch.optim import Adam
 
 from bioGraph.data.splitting import split_disease_genes_three_way
 from bioGraph.evaluation.metrics import compute_ranking_metrics
-from bioGraph.gcn_prioritization.model import GCN, GraphData, make_features, prepare_graph
+from bioGraph.gcn_prioritization.model import (
+    GCN,
+    GraphData,
+    make_features,
+    prepare_graph,
+)
 from bioGraph.methods.utils import scores_to_ranking
 
 
@@ -35,9 +40,7 @@ def _ranking(
 
 
 def predict_from_seed_genes(
-    model: GCN,
-    graph_data: GraphData,
-    seed_genes: Sequence[int],
+    model: GCN, graph_data: GraphData, seed_genes: Sequence[int],
 ) -> list[dict]:
     """Use a trained shared GCN to rank candidates for an input seed set."""
 
@@ -80,13 +83,12 @@ def train_single_disease(
         raise ValueError("graph_data must have been prepared from the supplied graph.")
     graph_genes = set(data.nodelist)
     known = sorted(set(disease_genes) & graph_genes)
-    visible_seed_genes, positive_training_targets, test_genes = (
-        split_disease_genes_three_way(
-            known,
-            seed_fraction,
-            training_target_fraction,
-            random_state=seed + 1,
-        )
+    (
+        visible_seed_genes,
+        positive_training_targets,
+        test_genes,
+    ) = split_disease_genes_three_way(
+        known, seed_fraction, training_target_fraction, random_state=seed + 1,
     )
     x = make_features(data, visible_seed_genes)
 
@@ -131,9 +133,7 @@ def train_single_disease(
         ]
         positive_score = logits[paired_positive_indices]
         negative_score = logits[negative_indices]
-        loss = torch.nn.functional.softplus(
-            -(positive_score - negative_score)
-        ).mean()
+        loss = torch.nn.functional.softplus(-(positive_score - negative_score)).mean()
         loss.backward()
         optimizer.step()
         losses.append(float(loss.item()))
@@ -258,15 +258,14 @@ def train_all_diseases(
                 task = tasks[disease_name]
                 positive_indices = task["positive_indices"]
                 n_negatives = min(
-                    len(task["negative_pool"]),
-                    negative_ratio * len(positive_indices),
+                    len(task["negative_pool"]), negative_ratio * len(positive_indices),
                 )
                 negative_indices = rng.choice(
                     task["negative_pool"], size=n_negatives, replace=False
                 )
-                paired_positive_indices = np.repeat(
-                    positive_indices, negative_ratio
-                )[:n_negatives]
+                paired_positive_indices = np.repeat(positive_indices, negative_ratio)[
+                    :n_negatives
+                ]
                 positive_score = logits[
                     torch.as_tensor(paired_positive_indices, device=device),
                     task_column,

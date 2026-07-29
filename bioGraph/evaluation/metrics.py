@@ -6,9 +6,7 @@ import numpy as np
 
 
 def compute_ranking_metrics(
-    ranking: Sequence[dict],
-    testing_set: Iterable,
-    k: Optional[int] = None,
+    ranking: Sequence[dict], testing_set: Iterable, k: Optional[int] = None,
 ) -> dict[str, float]:
     """Compute the main binary-ranking metrics from one relevance vector.
 
@@ -94,7 +92,9 @@ def compute_ranking_metrics(
     }
 
 
-def average_precision_at_k(ranking: Sequence[dict], testing_set: Iterable, k: Optional[int] = None) -> float:
+def average_precision_at_k(
+    ranking: Sequence[dict], testing_set: Iterable, k: Optional[int] = None
+) -> float:
     """Compute average precision at k for a ranking of dict rows."""
     if not ranking:
         return 0.0
@@ -125,7 +125,9 @@ def average_precision_at_k(ranking: Sequence[dict], testing_set: Iterable, k: Op
     return precision_sum / min(len(relevant), k)
 
 
-def recall_at_k(ranking: Sequence[dict], testing_set: Iterable, k: Optional[int] = None) -> float:
+def recall_at_k(
+    ranking: Sequence[dict], testing_set: Iterable, k: Optional[int] = None
+) -> float:
     """Compute recall at k for a ranking of dict rows."""
     if not ranking:
         return 0.0
@@ -165,7 +167,9 @@ def mean_reciprocal_rank_at_k(
     return 0.0
 
 
-def f1_score_at_k(ranking: Sequence[dict], testing_set: Iterable, k: Optional[int] = None) -> float:
+def f1_score_at_k(
+    ranking: Sequence[dict], testing_set: Iterable, k: Optional[int] = None
+) -> float:
     """Compute F1 score at k for a ranking of dict rows."""
     if not ranking:
         return 0.0
@@ -188,6 +192,3 @@ def f1_score_at_k(ranking: Sequence[dict], testing_set: Iterable, k: Optional[in
     precision_at_k = true_positives / k
     recall_value = true_positives / len(relevant)
     return 2 * precision_at_k * recall_value / (precision_at_k + recall_value)
-
-
- 
