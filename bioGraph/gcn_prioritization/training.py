@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional
 from torch.optim import Adam
 
-from bioGraph.data.splitting import split_disease_genes_three_way
+from bioGraph.data.splitting import split_known_genes, split_training_genes
 from bioGraph.evaluation.metrics import compute_ranking_metrics
 from bioGraph.gcn_prioritization.model import (
     GCN,
@@ -37,6 +37,18 @@ def _ranking(
     return scores_to_ranking(
         scores.detach().cpu().numpy(), data.nodelist, data.graph, excluded
     )
+
+
+def _validate_outer_split(split: Mapping[str, Sequence[int]], known: Sequence[int]) -> None:
+    if set(split) != {"train_genes", "test_genes"}:
+        raise ValueError("outer_split must contain exactly train_genes and test_genes.")
+    train_set, test_set = set(split["train_genes"]), set(split["test_genes"])
+    if not train_set or not test_set:
+        raise ValueError("outer_split train and test subsets must both be nonempty.")
+    if train_set & test_set:
+        raise ValueError("outer_split train and test subsets must be disjoint.")
+    if train_set | test_set != set(known):
+        raise ValueError("outer_split must partition exactly the known genes in the graph.")
 
 
 def predict_from_seed_genes(
@@ -68,12 +80,13 @@ def train_single_disease(
     learning_rate: float = 0.01,
     weight_decay: float = 1e-4,
     negative_ratio: int = 5,
-    seed_fraction: float = 0.5,
-    training_target_fraction: float = 0.25,
+    train_fraction: float = 0.75,
+    inner_seed_fraction: float = 2.0 / 3.0,
     seed: int = 42,
     graph_data: GraphData | None = None,
+    outer_split: Mapping[str, Sequence[int]] | None = None,
 ) -> dict:
-    """Train with visible seeds/targets and evaluate only on held-out genes."""
+    """Train on random inner splits and evaluate on one shared outer split."""
 
     set_seed(seed)
     # Reusing graph_data avoids rebuilding the same full sparse adjacency when
@@ -83,14 +96,10 @@ def train_single_disease(
         raise ValueError("graph_data must have been prepared from the supplied graph.")
     graph_genes = set(data.nodelist)
     known = sorted(set(disease_genes) & graph_genes)
-    (
-        visible_seed_genes,
-        positive_training_targets,
-        test_genes,
-    ) = split_disease_genes_three_way(
-        known, seed_fraction, training_target_fraction, random_state=seed + 1,
-    )
-    x = make_features(data, visible_seed_genes)
+    split = outer_split or split_known_genes(known, train_fraction, random_state=seed)
+    _validate_outer_split(split, known)
+    train_genes = list(split["train_genes"])
+    test_genes = list(split["test_genes"])
 
     known_set = set(known)
     negative_pool = np.asarray(
@@ -100,23 +109,29 @@ def train_single_disease(
         raise ValueError("negative_ratio must be at least 1.")
     if epochs < 1:
         raise ValueError("epochs must be at least 1.")
-    n_negatives = min(
-        len(negative_pool), negative_ratio * len(positive_training_targets)
-    )
     rng = np.random.default_rng(seed + 2)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    x, adjacency = x.to(device), data.adjacency.to(device)
+    adjacency = data.adjacency.to(device)
     model = GCN(in_channels=2, hidden_dim=hidden_dim, dropout=0.2).to(device)
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    positive_indices = torch.tensor(
-        [data.node_to_index[int(gene)] for gene in positive_training_targets],
-        dtype=torch.long,
-        device=device,
-    )
 
     losses: list[float] = []
+    inner_splits: list[dict[str, list]] = []
     for _ in range(epochs):
+        inner_split = split_training_genes(
+            train_genes, inner_seed_fraction, random_state=rng
+        )
+        inner_splits.append(inner_split)
+        x = make_features(data, inner_split["seed_genes"]).to(device)
+        positive_indices = torch.tensor(
+            [data.node_to_index[int(gene)] for gene in inner_split["label_genes"]],
+            dtype=torch.long,
+            device=device,
+        )
+        n_negatives = min(
+            len(negative_pool), negative_ratio * len(positive_indices)
+        )
         sampled = rng.choice(negative_pool, size=n_negatives, replace=False)
         negative_indices = torch.tensor(
             [data.node_to_index[int(gene)] for gene in sampled],
@@ -139,19 +154,19 @@ def train_single_disease(
         losses.append(float(loss.item()))
 
     model.eval()
+    x = make_features(data, train_genes).to(device)
     with torch.no_grad():
         scores = model(x, adjacency)
-    # Only visible seeds are excluded. Training targets remain candidates, while
-    # evaluation relevance is restricted strictly to held-out test genes.
-    ranking = _ranking(scores, data, visible_seed_genes)
+    ranking = _ranking(scores, data, train_genes)
     return {
         "model": model,
         "graph_data": data,
         "scores": scores.cpu(),
         "ranking": ranking,
-        "visible_seed_genes": visible_seed_genes.tolist(),
-        "positive_training_targets": positive_training_targets.tolist(),
-        "test_genes": test_genes.tolist(),
+        "train_genes": train_genes,
+        "test_genes": test_genes,
+        "inner_splits": inner_splits,
+        "visible_seed_genes": train_genes,
         "losses": losses,
         "known_in_graph": len(known),
         "known_not_in_graph": len(set(disease_genes) - graph_genes),
@@ -169,12 +184,13 @@ def train_all_diseases(
     learning_rate: float = 0.01,
     weight_decay: float = 1e-4,
     negative_ratio: int = 5,
-    seed_fraction: float = 0.5,
-    training_target_fraction: float = 0.25,
+    train_fraction: float = 0.75,
+    inner_seed_fraction: float = 2.0 / 3.0,
     seed: int = 42,
     verbose: bool = True,
     keep_details: bool = False,
     task_batch_size: int = 8,
+    outer_splits: Mapping[str, Mapping[str, Sequence[int]]] | None = None,
 ) -> dict:
     """Train one shared GCN across all disease-conditioned ranking tasks.
 
@@ -201,32 +217,28 @@ def train_all_diseases(
     graph_gene_set = set(data.nodelist)
     rng = np.random.default_rng(seed + 1)
 
-    # Construct every disease task once. Test genes are retained only for the
-    # final metric calculation and never enter a loss or negative pool.
+    # Construct every outer task once. Inner seed/label samples are regenerated
+    # during training; outer test genes never enter an input, loss, or pool.
     tasks: dict[str, dict] = {}
-    for disease_index, disease_name in enumerate(sorted(diseases)):
+    for disease_name in sorted(diseases):
         supplied_genes = set(diseases[disease_name])
         known = sorted(supplied_genes & graph_gene_set)
-        visible, targets, test = split_disease_genes_three_way(
-            known,
-            seed_fraction,
-            training_target_fraction,
-            random_state=seed + disease_index + 2,
+        split = (
+            outer_splits[disease_name]
+            if outer_splits is not None and disease_name in outer_splits
+            else split_known_genes(known, train_fraction, random_state=seed)
         )
+        _validate_outer_split(split, known)
+        train_genes, test = split["train_genes"], split["test_genes"]
         known_set = set(known)
         negative_pool = np.asarray(
             [data.node_to_index[g] for g in data.nodelist if g not in known_set],
             dtype=np.int64,
         )
         tasks[disease_name] = {
-            "features": make_features(data, visible),
-            "positive_indices": np.asarray(
-                [data.node_to_index[int(g)] for g in targets], dtype=np.int64
-            ),
             "negative_pool": negative_pool,
-            "visible_seed_genes": visible.tolist(),
-            "positive_training_targets": targets.tolist(),
-            "test_genes": test.tolist(),
+            "train_genes": list(train_genes),
+            "test_genes": list(test),
             "known_in_graph": len(known),
             "known_not_in_graph": len(supplied_genes - graph_gene_set),
         }
@@ -245,10 +257,18 @@ def train_all_diseases(
 
         for start in range(0, len(shuffled_names), task_batch_size):
             batch_names = shuffled_names[start : start + task_batch_size]
+            inner_splits = {
+                name: split_training_genes(
+                    tasks[name]["train_genes"], inner_seed_fraction, random_state=rng
+                )
+                for name in batch_names
+            }
             # [nodes, disease tasks, 2 features]. The sparse graph multiply is
             # shared across the task batch; only the seed channel differs.
             features = torch.stack(
-                [tasks[name]["features"] for name in batch_names], dim=1
+                [make_features(data, inner_splits[name]["seed_genes"])
+                 for name in batch_names],
+                dim=1,
             ).to(device)
 
             optimizer.zero_grad()
@@ -256,7 +276,11 @@ def train_all_diseases(
             task_losses = []
             for task_column, disease_name in enumerate(batch_names):
                 task = tasks[disease_name]
-                positive_indices = task["positive_indices"]
+                positive_indices = np.asarray(
+                    [data.node_to_index[int(g)]
+                     for g in inner_splits[disease_name]["label_genes"]],
+                    dtype=np.int64,
+                )
                 n_negatives = min(
                     len(task["negative_pool"]), negative_ratio * len(positive_indices),
                 )
@@ -297,14 +321,16 @@ def train_all_diseases(
         for start in range(0, len(disease_names), task_batch_size):
             batch_names = disease_names[start : start + task_batch_size]
             features = torch.stack(
-                [tasks[name]["features"] for name in batch_names], dim=1
+                [make_features(data, tasks[name]["train_genes"])
+                 for name in batch_names],
+                dim=1,
             ).to(device)
             batch_scores = model(features, adjacency).cpu()
 
             for task_column, disease_name in enumerate(batch_names):
                 task = tasks[disease_name]
                 scores = batch_scores[:, task_column]
-                ranking = _ranking(scores, data, task["visible_seed_genes"])
+                ranking = _ranking(scores, data, task["train_genes"])
                 metrics: dict[str, float] = {}
                 for k in k_values:
                     combined_metrics = compute_ranking_metrics(
@@ -315,7 +341,7 @@ def train_all_diseases(
                 result = {
                     key: value
                     for key, value in task.items()
-                    if key not in {"features", "positive_indices", "negative_pool"}
+                    if key != "negative_pool"
                 }
                 result["metrics"] = metrics
                 if keep_details:

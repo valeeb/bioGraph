@@ -25,8 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--negative-ratio", type=int, default=5)
-    parser.add_argument("--seed-fraction", type=float, default=0.5)
-    parser.add_argument("--training-target-fraction", type=float, default=0.25)
+    parser.add_argument("--train-fraction", type=float, default=0.75)
+    parser.add_argument("--inner-seed-fraction", type=float, default=2.0 / 3.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--k-values", type=int, nargs="+", default=[25, 100, 300])
     return parser.parse_args()
@@ -50,8 +50,8 @@ def main() -> None:
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
         negative_ratio=args.negative_ratio,
-        seed_fraction=args.seed_fraction,
-        training_target_fraction=args.training_target_fraction,
+        train_fraction=args.train_fraction,
+        inner_seed_fraction=args.inner_seed_fraction,
         seed=args.seed,
     )
     ranking, test_genes = result["ranking"], result["test_genes"]
@@ -65,8 +65,7 @@ def main() -> None:
     print(
         f"Known genes in/outside graph: "
         f"{result['known_in_graph']}/{result['known_not_in_graph']} | "
-        f"split: {len(result['visible_seed_genes'])} visible seeds, "
-        f"{len(result['positive_training_targets'])} training targets, "
+        f"outer split: {len(result['train_genes'])} training genes, "
         f"{len(test_genes)} held-out tests"
     )
     print(

@@ -4,19 +4,49 @@ from __future__ import annotations
 
 import pickle
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
-
+from typing import Iterable, Mapping, NamedTuple, Sequence
+from tqdm import tqdm
 import networkx as nx
 import numpy as np
 from scipy import sparse
 
-from bioGraph.data.splitting import split_disease_genes
+from bioGraph.data.splitting import split_known_genes
 from bioGraph.methods.ranking import (diamond_score, dk_score,
                                       neighbourhood_score, normalize_adjacency,
                                       qa_score, rwr_score)
 
 DEFAULT_METHODS = ("aNBR", "rNBR", "RWR", "DK", "QA+", "QA-", "DIAMOND")
-ARTIFACT_SCHEMA_VERSION = 3
+ARTIFACT_SCHEMA_VERSION = 5
+
+
+class BasisMatrices(NamedTuple):
+    """Graph node order and sparse matrices shared by benchmark methods."""
+
+    nodelist: list
+    adjacency: sparse.csr_matrix
+    laplacian: sparse.csr_matrix
+    normalized_adjacency: sparse.csr_matrix
+
+
+def precompute_basis_matrices(graph: nx.Graph) -> BasisMatrices:
+    """Build the sparse matrices used by the benchmark in one node order."""
+
+    nodelist = list(graph.nodes())
+    adjacency = sparse.csr_matrix(
+        nx.adjacency_matrix(graph, nodelist=nodelist), dtype=float
+    )
+    laplacian = sparse.csr_matrix(
+        nx.laplacian_matrix(graph, nodelist=nodelist), dtype=float
+    )
+    normalized_adjacency = normalize_adjacency(
+        graph, adjacency, nodelist=nodelist
+    )
+    return BasisMatrices(
+        nodelist=nodelist,
+        adjacency=adjacency,
+        laplacian=laplacian,
+        normalized_adjacency=normalized_adjacency,
+    )
 
 
 def run_benchmark_simulation(
@@ -27,7 +57,7 @@ def run_benchmark_simulation(
     disease_set: Iterable[str],
     method_set: Iterable[str] = DEFAULT_METHODS,
     num_runs: int = 30,
-    split_fraction: float = 0.5,
+    split_fraction: float = 0.75,
     base_seed: int = 0,
     rwr_return_prob: float = 0.4,
     qa_t: float = 0.45,
@@ -38,7 +68,8 @@ def run_benchmark_simulation(
 ) -> dict:
     """Run all requested methods on reproducible disease-specific splits.
 
-    Every method in a run receives that run's ``train_genes``. The complete
+    Every deterministic method receives the 75% training union of seed and
+    development genes. Test genes remain reserved for evaluation. The complete
     result dictionary is serialized to ``output_path`` and returned.
     """
 
@@ -57,14 +88,8 @@ def run_benchmark_simulation(
     if num_runs < 1:
         raise ValueError("num_runs must be at least 1.")
 
-    nodelist = list(graph.nodes())
-    adjacency = sparse.csr_matrix(
-        nx.adjacency_matrix(graph, nodelist=nodelist), dtype=float
-    )
-    laplacian = sparse.csr_matrix(
-        nx.laplacian_matrix(graph, nodelist=nodelist), dtype=float
-    )
-    normalized_adjacency = normalize_adjacency(graph, adjacency, nodelist=nodelist)
+    basis = precompute_basis_matrices(graph)
+    nodelist = basis.nodelist
 
     hyperparameters = {
         "rwr_return_prob": rwr_return_prob,
@@ -88,29 +113,32 @@ def run_benchmark_simulation(
         "runs": [],
     }
 
-    for disease_name in selected_diseases:
-        for run_index in range(num_runs):
+    for disease_name in tqdm(selected_diseases, desc="Diseases"):
+        for run_index in tqdm(range(num_runs), desc="Runs", leave=False):
             split_seed = base_seed + run_index
-            train_genes, test_genes = split_disease_genes(
-                disease_name, split_fraction, diseases, random_state=split_seed,
+            known = sorted(set(diseases[disease_name]) & set(graph))
+            split = split_known_genes(
+                known,
+                train_fraction=split_fraction,
+                random_state=split_seed,
             )
             scores = _score_methods(
                 graph,
-                train_genes,
+                split["train_genes"],
                 selected_methods,
                 nodelist=nodelist,
-                adjacency=adjacency,
-                laplacian=laplacian,
-                normalized_adjacency=normalized_adjacency,
+                adjacency=basis.adjacency,
+                laplacian=basis.laplacian,
+                normalized_adjacency=basis.normalized_adjacency,
                 hyperparameters=hyperparameters,
             )
-            _validate_run(graph, train_genes, test_genes, scores)
+            _validate_run(graph, split, scores)
             results["runs"].append(
                 {
                     "disease": disease_name,
                     "seed": split_seed,
-                    "train_genes": [int(gene) for gene in train_genes],
-                    "test_genes": [int(gene) for gene in test_genes],
+                    "train_genes": split["train_genes"],
+                    "test_genes": split["test_genes"],
                     "scores": scores,
                 }
             )
@@ -142,7 +170,9 @@ def validate_benchmark_results(results: Mapping) -> None:
     expected_methods = set(config.get("method_set", []))
     expected_size = len(nodelist)
     for row in runs:
-        if set(row["train_genes"]) & set(row["test_genes"]):
+        train_genes = set(row["train_genes"])
+        test_genes = set(row["test_genes"])
+        if train_genes & test_genes:
             raise ValueError("Artifact contains overlapping train/test genes.")
         if set(row["scores"]) != expected_methods:
             raise ValueError("Artifact score methods do not match its configuration.")
@@ -157,7 +187,7 @@ def validate_benchmark_results(results: Mapping) -> None:
 
 def _score_methods(
     graph,
-    train_genes,
+    training_genes,
     method_set,
     *,
     nodelist,
@@ -172,7 +202,7 @@ def _score_methods(
     if "QA+" in method_set:
         scores["QA+"] = qa_score(
             graph,
-            train_genes,
+            training_genes,
             t=hyperparameters["qa_t"],
             H=adjacency,
             diag=hyperparameters["qa_diag"],
@@ -181,7 +211,7 @@ def _score_methods(
     if "QA-" in method_set:
         scores["QA-"] = qa_score(
             graph,
-            train_genes,
+            training_genes,
             t=hyperparameters["qa_t"],
             H=-adjacency,
             diag=hyperparameters["qa_diag"],
@@ -190,7 +220,7 @@ def _score_methods(
     if "DK" in method_set:
         scores["DK"] = dk_score(
             graph,
-            train_genes,
+            training_genes,
             t=hyperparameters["dk_t"],
             L=laplacian,
             nodelist=nodelist,
@@ -198,14 +228,14 @@ def _score_methods(
     if "RWR" in method_set:
         scores["RWR"] = rwr_score(
             graph,
-            train_genes,
+            training_genes,
             normalized_adjacency=normalized_adjacency,
             return_prob=hyperparameters["rwr_return_prob"],
             nodelist=nodelist,
         )
     if "aNBR" in method_set or "rNBR" in method_set:
         relative, absolute = neighbourhood_score(
-            graph, train_genes, A=adjacency, nodelist=nodelist, weighted="both",
+            graph, training_genes, A=adjacency, nodelist=nodelist, weighted="both",
         )
         if "aNBR" in method_set:
             scores["aNBR"] = absolute
@@ -214,7 +244,7 @@ def _score_methods(
     if "DIAMOND" in method_set:
         scores["DIAMOND"] = diamond_score(
             graph,
-            train_genes,
+            training_genes,
             A=adjacency,
             alpha=hyperparameters["diamond_alpha"],
             number_to_rank=hyperparameters["diamond_number_to_rank"],
@@ -223,11 +253,13 @@ def _score_methods(
     return {name: np.asarray(scores[name], dtype=float) for name in method_set}
 
 
-def _validate_run(graph, train_genes, test_genes, scores):
+def _validate_run(graph, split, scores):
     """Reject inconsistent splits or malformed method outputs before saving."""
 
-    if set(train_genes) & set(test_genes):
-        raise ValueError("Training and testing genes overlap.")
+    train_genes = set(split["train_genes"])
+    test_genes = set(split["test_genes"])
+    if train_genes & test_genes:
+        raise ValueError("Train and test genes overlap.")
     expected_size = graph.number_of_nodes()
     for method_name, values in scores.items():
         if values.shape != (expected_size,):

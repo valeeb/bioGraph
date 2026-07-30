@@ -1,79 +1,116 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Iterable
 
 import numpy as np
 
 
+def _as_unique_array(known_genes: Iterable) -> np.ndarray:
+    if hasattr(known_genes, "detach"):
+        known_genes = known_genes.detach().cpu().numpy()
+    values = np.asarray(
+        list(known_genes) if isinstance(known_genes, set) else known_genes
+    )
+    values = values.reshape(-1)
+    if values.size == 0:
+        return values
+    # Sorting makes a seeded split independent of list/set iteration order.
+    return np.asarray(sorted(set(values.tolist())))
+
+
+def _split_sizes(size: int, fractions: np.ndarray) -> np.ndarray:
+    """Allocate integer sizes by largest remainder, then enforce nonempty parts."""
+
+    exact = fractions * size
+    counts = np.floor(exact).astype(int)
+    remainder_order = np.argsort(-(exact - counts), kind="stable")
+    for index in remainder_order[: size - int(counts.sum())]:
+        counts[index] += 1
+
+    for empty_index in np.flatnonzero(counts == 0):
+        donors = np.flatnonzero(counts > 1)
+        if not len(donors):
+            raise ValueError("Cannot make every split nonempty with these genes.")
+        donor = donors[np.argmax(counts[donors] - exact[donors])]
+        counts[donor] -= 1
+        counts[empty_index] += 1
+    return counts
+
+
+def split_known_genes(
+    known_genes: Iterable,
+    train_fraction: float = 0.75,
+    random_state: int | np.random.Generator | None = None,
+) -> dict[str, list]:
+    """Reproducibly create the shared outer train/test split.
+
+    Integer sizes use the largest-remainder rule, and both subsets are kept
+    nonempty whenever at least two unique genes are supplied.
+    """
+
+    genes = _as_unique_array(known_genes)
+    if len(genes) < 2:
+        raise ValueError(
+            "At least two unique known genes are required for nonempty train "
+            "and test subsets."
+        )
+    if not np.isfinite(train_fraction) or not 0.0 < train_fraction < 1.0:
+        raise ValueError("train_fraction must be between zero and one.")
+
+    rng = (
+        random_state
+        if isinstance(random_state, np.random.Generator)
+        else np.random.default_rng(random_state)
+    )
+    shuffled = rng.permutation(genes)
+    n_train, _ = _split_sizes(
+        len(shuffled), np.asarray([train_fraction, 1.0 - train_fraction])
+    )
+    split = {
+        "train_genes": np.sort(shuffled[:n_train]).tolist(),
+        "test_genes": np.sort(shuffled[n_train:]).tolist(),
+    }
+    assert set().union(*(set(values) for values in split.values())) == set(genes)
+    assert set(split["train_genes"]).isdisjoint(split["test_genes"])
+    return split
+
+
+def split_training_genes(
+    train_genes: Iterable,
+    seed_fraction: float = 2.0 / 3.0,
+    random_state: int | np.random.Generator | None = None,
+) -> dict[str, list]:
+    """Create one random inner GCN sample from the outer training genes."""
+
+    split = split_known_genes(train_genes, seed_fraction, random_state)
+    return {
+        "seed_genes": split["train_genes"],
+        "label_genes": split["test_genes"],
+    }
+
+
 def split_disease_genes_three_way(
-    positives: Sequence[int],
-    seed_fraction: float,
-    training_target_fraction: float,
-    random_state: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Split known genes into visible seeds, training targets, and held-out tests."""
+    positives, seed_fraction, training_target_fraction, random_state=None
+):
+    """Compatibility wrapper; new code should use :func:`split_known_genes`."""
 
-    positives = np.asarray(sorted(set(positives)), dtype=np.int64)
-    if len(positives) < 3:
-        raise ValueError("At least three disease genes in the PPI are needed.")
-    if not 0.0 < seed_fraction < 1.0:
-        raise ValueError("seed_fraction must be between 0 and 1.")
-    if not 0.0 < training_target_fraction < 1.0:
-        raise ValueError("training_target_fraction must be between 0 and 1.")
-    if seed_fraction + training_target_fraction >= 1.0:
-        raise ValueError("seed and training-target fractions must sum to less than 1.")
-
-    shuffled = np.random.default_rng(random_state).permutation(positives)
-    n_seeds = min(max(1, round(seed_fraction * len(shuffled))), len(shuffled) - 2)
-    n_targets = min(
-        max(1, round(training_target_fraction * len(shuffled))),
-        len(shuffled) - n_seeds - 1,
+    outer = split_known_genes(
+        positives, seed_fraction + training_target_fraction, random_state
     )
-    return (
-        np.sort(shuffled[:n_seeds]),
-        np.sort(shuffled[n_seeds : n_seeds + n_targets]),
-        np.sort(shuffled[n_seeds + n_targets :]),
+    inner = split_training_genes(
+        outer["train_genes"],
+        seed_fraction / (seed_fraction + training_target_fraction),
+        random_state,
     )
+    return inner["seed_genes"], inner["label_genes"], outer["test_genes"]
 
 
 def split_disease_genes(disease_name, split_fraction, diseases_dict, random_state=None):
-    """
-    Randomly split the genes of one disease into training and test sets.
-
-    Parameters
-    ----------
-    disease_name : str
-        Disease key in the diseases dictionary.
-    split_fraction : float
-        Fraction of genes to place in training set (between 0 and 1).
-    diseases_dict : dict
-        Disease-to-genes mapping.
-    random_state : int, optional
-        Seed for reproducible random split.
-
-    Returns
-    -------
-    train_genes : list[int]
-    test_genes : list[int]
-    """
+    """Compatibility wrapper around the shared outer train/test split."""
 
     if disease_name not in diseases_dict:
         raise ValueError(f"Disease '{disease_name}' not found.")
-
-    if not (0 < split_fraction < 1):
-        raise ValueError("split_fraction must be between 0 and 1 (exclusive).")
-
-    genes = list(diseases_dict[disease_name])
-    if len(genes) < 2:
-        raise ValueError("Need at least 2 genes to create train/test split.")
-
-    rng = np.random.default_rng(random_state)
-    shuffled = rng.permutation(genes)
-
-    n_train = int(len(shuffled) * split_fraction)
-    n_train = max(1, min(n_train, len(shuffled) - 1))
-
-    train_genes = shuffled[:n_train].tolist()
-    test_genes = shuffled[n_train:].tolist()
-
-    return train_genes, test_genes
+    split = split_known_genes(
+        diseases_dict[disease_name], split_fraction, random_state
+    )
+    return split["train_genes"], split["test_genes"]
