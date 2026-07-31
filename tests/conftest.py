@@ -37,6 +37,16 @@ def disease_genes() -> dict[str, list[int]]:
 
 
 @pytest.fixture
+def disease_outer_splits() -> dict[str, dict[str, list[int]]]:
+    """Return deterministic, leakage-free outer splits for both test diseases."""
+
+    return {
+        "disease_a": {"train_genes": [1, 2], "test_genes": [4]},
+        "disease_b": {"train_genes": [3, 5], "test_genes": [6]},
+    }
+
+
+@pytest.fixture
 def ranking_factory() -> Callable[[Mapping[int, float]], list[dict]]:
     """Build ranking rows from gene-to-score mappings."""
 

@@ -14,9 +14,13 @@ from bioGraph.data.splitting import split_known_genes
 from bioGraph.methods.ranking import (diamond_score, dk_score,
                                       neighbourhood_score, normalize_adjacency,
                                       qa_score, rwr_score)
+from bioGraph.methods.utils import (disease_edge_counts_for_split,
+                                    precompute_disease_edge_counts)
 
-DEFAULT_METHODS = ("aNBR", "rNBR", "RWR", "DK", "QA+", "QA-", "DIAMOND")
-ARTIFACT_SCHEMA_VERSION = 5
+DEFAULT_METHODS = (
+    "aNBR", "rNBR", "RWR", "DK", "DK*", "QA0", "QA1", "QA*", "DIAMOND"
+)
+ARTIFACT_SCHEMA_VERSION = 7
 
 
 class BasisMatrices(NamedTuple):
@@ -61,8 +65,8 @@ def run_benchmark_simulation(
     base_seed: int = 0,
     rwr_return_prob: float = 0.4,
     qa_t: float = 0.45,
-    qa_diag: float = 5,
     dk_t: float = 0.3,
+    beta: float = 0.5,
     diamond_alpha: float = 9,
     diamond_number_to_rank: int = 300,
 ) -> dict:
@@ -70,7 +74,8 @@ def run_benchmark_simulation(
 
     Every deterministic method receives the 75% training union of seed and
     development genes. Test genes remain reserved for evaluation. The complete
-    result dictionary is serialized to ``output_path`` and returned.
+    result dictionary is serialized to ``output_path`` and returned. ``beta``
+    controls the shared-disease bond weighting used by both QA* and DK*.
     """
 
     selected_diseases = list(disease_set)
@@ -87,6 +92,8 @@ def run_benchmark_simulation(
         raise ValueError("method_set must not be empty.")
     if num_runs < 1:
         raise ValueError("num_runs must be at least 1.")
+    if not np.isfinite(beta) or beta < 0:
+        raise ValueError("beta must be finite and nonnegative.")
 
     basis = precompute_basis_matrices(graph)
     nodelist = basis.nodelist
@@ -94,7 +101,9 @@ def run_benchmark_simulation(
     hyperparameters = {
         "rwr_return_prob": rwr_return_prob,
         "qa_t": qa_t,
-        "qa_diag": qa_diag,
+        "beta": beta,
+        "qa1_diag": 5.0,
+        "qa_star_diag": 1.0,
         "dk_t": dk_t,
         "diamond_alpha": diamond_alpha,
         "diamond_number_to_rank": diamond_number_to_rank,
@@ -113,6 +122,12 @@ def run_benchmark_simulation(
         "runs": [],
     }
 
+    disease_edge_counts = (
+        precompute_disease_edge_counts(graph, diseases, nodelist=nodelist)
+        if {"QA*", "DK*"} & set(selected_methods)
+        else None
+    )
+
     for disease_name in tqdm(selected_diseases, desc="Diseases"):
         for run_index in tqdm(range(num_runs), desc="Runs", leave=False):
             split_seed = base_seed + run_index
@@ -130,6 +145,8 @@ def run_benchmark_simulation(
                 adjacency=basis.adjacency,
                 laplacian=basis.laplacian,
                 normalized_adjacency=basis.normalized_adjacency,
+                disease_edge_counts=disease_edge_counts,
+                complete_target_genes=diseases[disease_name],
                 hyperparameters=hyperparameters,
             )
             _validate_run(graph, split, scores)
@@ -194,27 +211,49 @@ def _score_methods(
     adjacency,
     laplacian,
     normalized_adjacency,
+    disease_edge_counts,
+    complete_target_genes,
     hyperparameters,
 ):
     """Calculate only the requested score vectors for one split."""
 
     scores = {}
-    if "QA+" in method_set:
-        scores["QA+"] = qa_score(
+    weighted_adjacency = None
+    if {"QA*", "DK*"} & set(method_set):
+        split_counts = disease_edge_counts_for_split(
+            graph,
+            disease_edge_counts,
+            complete_target_genes,
+            training_genes,
+            nodelist=nodelist,
+        )
+        weighted_adjacency = split_counts.copy()
+        weighted_adjacency.data **= hyperparameters["beta"]
+
+    if "QA0" in method_set:
+        scores["QA0"] = qa_score(
             graph,
             training_genes,
             t=hyperparameters["qa_t"],
             H=adjacency,
-            diag=hyperparameters["qa_diag"],
             nodelist=nodelist,
         )
-    if "QA-" in method_set:
-        scores["QA-"] = qa_score(
+    if "QA1" in method_set:
+        scores["QA1"] = qa_score(
             graph,
             training_genes,
             t=hyperparameters["qa_t"],
-            H=-adjacency,
-            diag=hyperparameters["qa_diag"],
+            H=adjacency,
+            diag=hyperparameters["qa1_diag"],
+            nodelist=nodelist,
+        )
+    if "QA*" in method_set:
+        scores["QA*"] = qa_score(
+            graph,
+            training_genes,
+            t=hyperparameters["qa_t"],
+            H=-weighted_adjacency,
+            diag=hyperparameters["qa_star_diag"],
             nodelist=nodelist,
         )
     if "DK" in method_set:
@@ -223,6 +262,16 @@ def _score_methods(
             training_genes,
             t=hyperparameters["dk_t"],
             L=laplacian,
+            nodelist=nodelist,
+        )
+    if "DK*" in method_set:
+        weighted_degree = np.asarray(weighted_adjacency.sum(axis=1)).ravel()
+        weighted_laplacian = sparse.diags(weighted_degree) - weighted_adjacency
+        scores["DK*"] = dk_score(
+            graph,
+            training_genes,
+            t=hyperparameters["dk_t"],
+            L=sparse.csr_matrix(weighted_laplacian),
             nodelist=nodelist,
         )
     if "RWR" in method_set:

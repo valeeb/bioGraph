@@ -30,3 +30,13 @@ pytest -m "not slow"
 
 Tests are automatically marked `unit`, `equivalence`, or `integration` based on
 their containing directory. Use `@pytest.mark.slow` explicitly when needed.
+
+GCN tests should be run in the project's PyTorch-enabled `qdgp` environment:
+
+```bash
+conda run -n qdgp python -m pytest tests/unit/gcn_prioritization
+```
+
+The GCN test modules skip cleanly when PyTorch is unavailable. The notebook
+contract test remains dependency-free; it checks that `GNN.ipynb` uses the joint
+training API, supplies a disease ID at inference, and contains no stale outputs.

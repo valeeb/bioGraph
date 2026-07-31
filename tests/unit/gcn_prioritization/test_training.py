@@ -3,7 +3,11 @@ import pytest
 pytest.importorskip("torch")
 
 from bioGraph.data.splitting import split_known_genes  # noqa: E402
-from bioGraph.gcn_prioritization.training import train_single_disease  # noqa: E402
+from bioGraph.gcn_prioritization.model import DiseaseConditionedGCN  # noqa: E402
+from bioGraph.gcn_prioritization.training import (  # noqa: E402
+    train_all_diseases,
+    train_single_disease,
+)
 
 
 def test_single_disease_training_returns_a_complete_ranking(small_graph):
@@ -37,3 +41,35 @@ def test_gcn_consumes_the_exact_shared_split(small_graph):
     assert set(inner["seed_genes"]) | set(inner["label_genes"]) == set(
         split["train_genes"]
     )
+
+
+def test_all_diseases_jointly_train_one_conditioned_model_without_test_leakage(
+    small_graph, disease_genes, disease_outer_splits,
+):
+    result = train_all_diseases(
+        small_graph,
+        disease_genes,
+        epochs=1,
+        hidden_dim=4,
+        disease_embedding_dim=3,
+        negative_ratio=1,
+        outer_splits=disease_outer_splits,
+        verbose=False,
+        keep_details=True,
+    )
+
+    assert isinstance(result["model"], DiseaseConditionedGCN)
+    assert set(result) == {
+        "model",
+        "disease_to_id",
+        "graph_data",
+        "disease_results",
+        "losses",
+        "device",
+    }
+    assert result["disease_to_id"] == {"disease_a": 0, "disease_b": 1}
+    assert result["model"].disease_embeddings.weight.shape == (2, 3)
+    for disease, split in disease_outer_splits.items():
+        disease_result = result["disease_results"][disease]
+        assert disease_result["train_genes"] == split["train_genes"]
+        assert disease_result["test_genes"] == split["test_genes"]

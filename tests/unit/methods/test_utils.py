@@ -2,9 +2,26 @@ import networkx as nx
 import numpy as np
 
 from bioGraph.methods.utils import (
+    disease_edge_counts_for_split,
     disease_relevance_weighted_adjacency,
+    precompute_disease_edge_counts,
     scores_to_ranking,
 )
+
+
+def test_precomputed_counts_replace_target_with_training_memberships():
+    graph = nx.path_graph([0, 1, 2, 3])
+    diseases = {"target": [0, 1, 2], "other": [1, 2, 3]}
+    counts = precompute_disease_edge_counts(graph, diseases)
+
+    adjusted = disease_edge_counts_for_split(
+        graph, counts, diseases["target"], [0, 1]
+    )
+
+    np.testing.assert_array_equal(
+        adjusted.toarray(),
+        np.asarray([[0, 1, 0, 0], [1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0]]),
+    )
 
 
 def test_scores_to_ranking_sorts_candidates_and_excludes_seeds(small_graph):

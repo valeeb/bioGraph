@@ -1,11 +1,11 @@
-"""Command-line entry point for the minimal single-disease GCN example."""
+"""Command-line entry point for joint multi-disease GCN training."""
 
 import argparse
 from pathlib import Path
 
 from bioGraph.data.loading import load_disease_genes, load_ppi_graph
 from bioGraph.evaluation.metrics import mean_reciprocal_rank_at_k, recall_at_k
-from bioGraph.gcn_prioritization.training import train_single_disease
+from bioGraph.gcn_prioritization.training import train_all_diseases
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--disease-name", default="breast neoplasms")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--hidden-dim", type=int, default=32)
+    parser.add_argument("--disease-embedding-dim", type=int, default=16)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--negative-ratio", type=int, default=5)
@@ -42,10 +43,12 @@ def main() -> None:
             f"Unknown disease {args.disease_name!r}. Available diseases: {choices}"
         )
 
-    result = train_single_disease(
+    result = train_all_diseases(
         graph,
-        diseases[args.disease_name],
+        diseases,
+        k_values=args.k_values,
         hidden_dim=args.hidden_dim,
+        disease_embedding_dim=args.disease_embedding_dim,
         epochs=args.epochs,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
@@ -53,10 +56,13 @@ def main() -> None:
         train_fraction=args.train_fraction,
         inner_seed_fraction=args.inner_seed_fraction,
         seed=args.seed,
+        keep_details=True,
     )
-    ranking, test_genes = result["ranking"], result["test_genes"]
+    disease_result = result["disease_results"][args.disease_name]
+    ranking = disease_result["ranking"]
+    test_genes = disease_result["test_genes"]
 
-    print("Single-disease GCN prioritization")
+    print("Joint multi-disease GCN prioritization")
     print(f"Disease: {args.disease_name}")
     print(
         f"Graph: {graph.number_of_nodes():,} genes, "
@@ -64,8 +70,8 @@ def main() -> None:
     )
     print(
         f"Known genes in/outside graph: "
-        f"{result['known_in_graph']}/{result['known_not_in_graph']} | "
-        f"outer split: {len(result['train_genes'])} training genes, "
+        f"{disease_result['known_in_graph']}/{disease_result['known_not_in_graph']} | "
+        f"outer split: {len(disease_result['train_genes'])} training genes, "
         f"{len(test_genes)} held-out tests"
     )
     print(

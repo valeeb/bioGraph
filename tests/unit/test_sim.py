@@ -36,7 +36,7 @@ def test_benchmark_simulation_uses_each_runs_own_split(tmp_path):
         diseases,
         output_path,
         disease_set=["toy disease"],
-        method_set=["aNBR", "DK", "QA+"],
+        method_set=["aNBR", "DK", "DK*", "QA0", "QA1", "QA*"],
         num_runs=3,
         qa_t=0.2,
         dk_t=0.2,
@@ -52,10 +52,12 @@ def test_benchmark_simulation_uses_each_runs_own_split(tmp_path):
         subsets = [set(row[name]) for name in ("train_genes", "test_genes")]
         assert subsets[0].isdisjoint(subsets[1])
         assert set().union(*subsets) == set(graph)
-        assert set(row["scores"]) == {"aNBR", "DK", "QA+"}
+        assert set(row["scores"]) == {
+            "aNBR", "DK", "DK*", "QA0", "QA1", "QA*"
+        }
         assert all(values.shape == (len(graph),) for values in row["scores"].values())
 
-    qa_vectors = [row["scores"]["QA+"] for row in saved["runs"]]
+    qa_vectors = [row["scores"]["QA*"] for row in saved["runs"]]
     assert any(not np.array_equal(qa_vectors[0], values) for values in qa_vectors[1:])
     expected = split_known_genes(graph.nodes, random_state=0)
     assert saved["runs"][0]["train_genes"] == expected["train_genes"]

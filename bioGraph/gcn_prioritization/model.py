@@ -1,58 +1,14 @@
-"""GCN architecture and conversion of a NetworkX graph to PyTorch tensors."""
+"""Shared and disease-conditioned GCN model definitions."""
 
-from dataclasses import dataclass
-from typing import Sequence
-
-import networkx as nx
 import torch
 from torch import nn
 
-
-@dataclass
-class GraphData:
-    """The fixed node order and tensors used by the GCN."""
-
-    graph: nx.Graph
-    nodelist: list[int]
-    node_to_index: dict[int, int]
-    edge_index: torch.Tensor
-    adjacency: torch.Tensor
+# Compatibility re-exports: existing callers may still import these from model.
+from bioGraph.gcn_prioritization.data import GraphData, make_features, prepare_graph
 
 
-def prepare_graph(graph: nx.Graph) -> GraphData:
-    """Create the normalized sparse adjacency for the complete input graph."""
-
-    nodelist = sorted(graph.nodes())
-    node_to_index = {node: index for index, node in enumerate(nodelist)}
-    edges = [(node_to_index[a], node_to_index[b]) for a, b in graph.edges()]
-    src = [a for a, b in edges] + [b for a, b in edges]
-    dst = [b for a, b in edges] + [a for a, b in edges]
-    edge_index = torch.tensor([src, dst], dtype=torch.long)
-
-    # A_hat = A + I, followed by symmetric D^-1/2 normalization.
-    n = len(nodelist)
-    loop = torch.arange(n, dtype=torch.long)
-    row = torch.cat((edge_index[0], loop))
-    col = torch.cat((edge_index[1], loop))
-    degree = torch.bincount(row, minlength=n).float()
-    values = degree[row].rsqrt() * degree[col].rsqrt()
-    adjacency = torch.sparse_coo_tensor(
-        torch.stack((row, col)), values, (n, n)
-    ).coalesce()
-
-    return GraphData(graph, nodelist, node_to_index, edge_index, adjacency)
-
-
-def make_features(data: GraphData, visible_seed_genes: Sequence[int]) -> torch.Tensor:
-    """Create exactly two features: constant one and visible-seed indicator."""
-
-    seed_feature = torch.zeros(len(data.nodelist), dtype=torch.float32)
-    seed_feature[[data.node_to_index[int(gene)] for gene in visible_seed_genes]] = 1.0
-    return torch.stack((torch.ones(len(data.nodelist)), seed_feature), dim=1)
-
-
-class GCN(nn.Module):
-    """Four-step residual GCN producing one disease logit per node."""
+class GCNEncoder(nn.Module):
+    """Shared graph encoder producing one hidden representation per node."""
 
     def __init__(
         self, in_channels: int = 2, hidden_dim: int = 32, dropout: float = 0.2
@@ -64,8 +20,6 @@ class GCN(nn.Module):
             )
         self.linear1 = nn.Linear(in_channels, hidden_dim)
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
-        self.linear3 = nn.Linear(hidden_dim, hidden_dim)
-        self.output = nn.Linear(hidden_dim, 1)
         self.dropout = nn.Dropout(dropout)
 
     @staticmethod
@@ -87,15 +41,92 @@ class GCN(nn.Module):
         hidden = self._propagate(adjacency, x)
         hidden = self.dropout(torch.relu(self.linear1(hidden)))
 
-        # Propagations 2 and 3 retain hidden width, so residuals are valid.
+        # Propagation 2 retains hidden width, so the residual is valid.
         update = self._propagate(adjacency, hidden)
         update = self.dropout(torch.relu(self.linear2(update)))
         hidden = hidden + update
 
-        update = self._propagate(adjacency, hidden)
-        update = self.dropout(torch.relu(self.linear3(update)))
-        hidden = hidden + update
+        return hidden
 
-        # Propagation 4 followed by one scalar logit per node.
-        hidden = self._propagate(adjacency, hidden)
-        return self.output(hidden).squeeze(-1)
+
+class GCN(nn.Module):
+    """Backward-compatible single-task GCN built on the shared encoder."""
+
+    def __init__(
+        self, in_channels: int = 2, hidden_dim: int = 32, dropout: float = 0.2
+    ) -> None:
+        super().__init__()
+        self.encoder = GCNEncoder(in_channels, hidden_dim, dropout)
+        self.output = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x: torch.Tensor, adjacency: torch.Tensor) -> torch.Tensor:
+        return self.output(self.encoder(x, adjacency)).squeeze(-1)
+
+
+class DiseaseConditionedGCN(nn.Module):
+    """A shared GCN encoder with learned disease-specific embeddings."""
+
+    def __init__(
+        self,
+        num_diseases: int,
+        *,
+        in_channels: int = 2,
+        hidden_dim: int = 32,
+        disease_embedding_dim: int = 16,
+        dropout: float = 0.2,
+    ) -> None:
+        super().__init__()
+        if num_diseases < 1:
+            raise ValueError("num_diseases must be at least 1.")
+        self.encoder = GCNEncoder(in_channels, hidden_dim, dropout)
+        self.disease_embeddings = nn.Embedding(num_diseases, disease_embedding_dim)
+        # A nonlinear interaction is essential here. A single linear projection
+        # would add the same disease-dependent constant to every gene, which
+        # cancels from (positive_score - negative_score) in the ranking loss.
+        self.scorer = nn.Sequential(
+            nn.Linear(hidden_dim + disease_embedding_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        self.disease_projection = nn.Linear(
+            disease_embedding_dim, hidden_dim, bias=False
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        adjacency: torch.Tensor,
+        disease_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """Score genes for one task or a batch of disease tasks.
+
+        ``x`` is either ``[nodes, features]`` or
+        ``[nodes, tasks, features]``. The corresponding disease IDs have shape
+        ``[]``/``[1]`` or ``[tasks]``.
+        """
+
+        hidden = self.encoder(x, adjacency)
+        disease_ids = disease_ids.to(device=hidden.device, dtype=torch.long)
+        if x.ndim == 2:
+            if disease_ids.numel() != 1:
+                raise ValueError("A single graph sample requires one disease ID.")
+            embedding = self.disease_embeddings(disease_ids.reshape(1))[0]
+            embedding = embedding.expand(hidden.shape[0], -1)
+        elif x.ndim == 3:
+            disease_ids = disease_ids.reshape(-1)
+            if disease_ids.numel() != x.shape[1]:
+                raise ValueError("There must be one disease ID per task.")
+            embedding = self.disease_embeddings(disease_ids)
+            embedding = embedding.unsqueeze(0).expand(hidden.shape[0], -1, -1)
+        else:
+            raise ValueError("x must have two or three dimensions.")
+        combined_score = self.scorer(
+            torch.cat((hidden, embedding), dim=-1)
+        ).squeeze(-1)
+        # This explicit gene/disease interaction also ensures the embedding is
+        # not merely a gene-independent offset under the pairwise objective.
+        interaction_score = (
+            hidden * self.disease_projection(embedding)
+        ).sum(dim=-1) / hidden.shape[-1] ** 0.5
+        return combined_score + interaction_score
