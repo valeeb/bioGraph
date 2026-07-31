@@ -8,5 +8,5 @@ htmlcov/
 .pkl
 
 # Local datasets and generated experiment results
-data/
+data/processed
 outputs/results/
