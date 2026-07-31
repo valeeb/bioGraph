@@ -73,3 +73,24 @@ def test_all_diseases_jointly_train_one_conditioned_model_without_test_leakage(
         disease_result = result["disease_results"][disease]
         assert disease_result["train_genes"] == split["train_genes"]
         assert disease_result["test_genes"] == split["test_genes"]
+
+
+def test_each_training_run_initializes_a_new_model_for_its_outer_splits(
+    small_graph, disease_genes, disease_outer_splits,
+):
+    arguments = dict(
+        epochs=1,
+        hidden_dim=4,
+        disease_embedding_dim=3,
+        negative_ratio=1,
+        outer_splits=disease_outer_splits,
+        verbose=False,
+    )
+
+    first = train_all_diseases(small_graph, disease_genes, **arguments)
+    second = train_all_diseases(small_graph, disease_genes, **arguments)
+
+    assert first["model"] is not second["model"]
+    assert next(first["model"].parameters()).data_ptr() != next(
+        second["model"].parameters()
+    ).data_ptr()

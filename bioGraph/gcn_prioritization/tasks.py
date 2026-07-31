@@ -1,4 +1,4 @@
-"""Disease task construction and train/test leakage safeguards."""
+"""Disease task construction and comparison-pool utilities."""
 
 from typing import Mapping, Sequence
 
@@ -32,7 +32,7 @@ def build_disease_tasks(
     seed: int,
     outer_splits: Mapping[str, Mapping[str, Sequence[int]]] | None,
 ) -> dict[str, dict]:
-    """Build fixed disease tasks without exposing held-out genes to training."""
+    """Build tasks without exposing held-out disease associations to training."""
 
     graph_genes = set(data.nodelist)
     tasks: dict[str, dict] = {}
@@ -46,18 +46,30 @@ def build_disease_tasks(
         )
         validate_outer_split(split, known_genes)
 
-        # All known genes, including held-out positives, are excluded from the
-        # negative pool. Test genes therefore never become training labels.
-        known_set = set(known_genes)
-        negative_pool = np.asarray(
-            [data.node_to_index[g] for g in data.nodelist if g not in known_set],
-            dtype=np.int64,
-        )
         tasks[disease_name] = {
-            "negative_pool": negative_pool,
             "train_genes": list(split["train_genes"]),
             "test_genes": list(split["test_genes"]),
             "known_in_graph": len(known_genes),
             "known_not_in_graph": len(supplied_genes - graph_genes),
         }
     return tasks
+
+
+def comparison_gene_pool(
+    data: GraphData,
+    seed_genes: Sequence[int],
+    positive_genes: Sequence[int],
+) -> np.ndarray:
+    """Return candidate indices using only the current training sample.
+
+    Genes outside the inner seed and positive sets are indistinguishable here.
+    In particular, this function receives no outer-test set, so held-out genes
+    remain eligible as unlabelled comparison genes.
+    """
+
+    excluded = {int(gene) for gene in seed_genes}
+    excluded.update(int(gene) for gene in positive_genes)
+    return np.asarray(
+        [data.node_to_index[gene] for gene in data.nodelist if gene not in excluded],
+        dtype=np.int64,
+    )

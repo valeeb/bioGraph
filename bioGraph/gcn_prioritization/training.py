@@ -16,7 +16,11 @@ from bioGraph.gcn_prioritization.inference import (
 )
 from bioGraph.gcn_prioritization.model import DiseaseConditionedGCN, GCN
 from bioGraph.gcn_prioritization.objectives import pairwise_ranking_loss
-from bioGraph.gcn_prioritization.tasks import build_disease_tasks, validate_outer_split
+from bioGraph.gcn_prioritization.tasks import (
+    build_disease_tasks,
+    comparison_gene_pool,
+    validate_outer_split,
+)
 
 
 def set_seed(seed: int) -> None:
@@ -66,13 +70,6 @@ def train_single_disease(
     train_genes = list(split["train_genes"])
     test_genes = list(split["test_genes"])
 
-    # Genes with no known association to this disease act as candidate
-    # negatives. Because reliable biological negatives are rarely available,
-    # these are more precisely "unlabelled" examples treated as negatives.
-    known_set = set(known)
-    negative_pool = np.asarray(
-        [gene for gene in data.nodelist if gene not in known_set], dtype=np.int64
-    )
     if negative_ratio < 1:
         raise ValueError("negative_ratio must be at least 1.")
     if epochs < 1:
@@ -100,16 +97,19 @@ def train_single_disease(
             dtype=torch.long,
             device=device,
         )
+        comparison_pool = comparison_gene_pool(
+            data,
+            inner_split["seed_genes"],
+            inner_split["label_genes"],
+        )
         n_negatives = min(
-            len(negative_pool), negative_ratio * len(positive_indices)
+            len(comparison_pool), negative_ratio * len(positive_indices)
         )
         # Sampling a small negative subset avoids comparing every positive with
         # every node, which would be expensive and dominated by easy negatives.
-        sampled = rng.choice(negative_pool, size=n_negatives, replace=False)
-        negative_indices = torch.tensor(
-            [data.node_to_index[int(gene)] for gene in sampled],
-            dtype=torch.long,
-            device=device,
+        sampled = rng.choice(comparison_pool, size=n_negatives, replace=False)
+        negative_indices = torch.as_tensor(
+            sampled, dtype=torch.long, device=device
         )
         model.train()
         optimizer.zero_grad()
@@ -130,8 +130,8 @@ def train_single_disease(
         losses.append(float(loss.item()))
 
     model.eval()
-    # Final inference uses every outer-training gene as visible evidence. The
-    # held-out test genes remain invisible and are used only to score the ranking.
+    # Final inference uses every outer-training gene as visible evidence. Test
+    # associations are revealed only after scoring, for metric calculation.
     x = make_features(data, train_genes).to(device)
     with torch.no_grad():
         scores = model(x, adjacency)
@@ -198,9 +198,9 @@ def train_all_diseases(
     data = prepare_graph(graph)
     rng = np.random.default_rng(seed + 1)
 
-    # Construct the fixed outer train/test partition for every disease. Inner
-    # seed/label samples are regenerated during training; outer test genes never
-    # enter an input, loss, or negative pool. This is the key leakage boundary.
+    # Construct the fixed outer train/test partition for every disease. Once
+    # this is done, training uses only each task's outer-training genes. The
+    # held-out genes are retained solely for the final metric calculation.
     tasks = build_disease_tasks(
         data, diseases, train_fraction, seed, outer_splits
     )
@@ -261,11 +261,16 @@ def train_all_diseases(
                      for g in inner_splits[disease_name]["label_genes"]],
                     dtype=np.int64,
                 )
+                comparison_pool = comparison_gene_pool(
+                    data,
+                    inner_splits[disease_name]["seed_genes"],
+                    inner_splits[disease_name]["label_genes"],
+                )
                 n_negatives = min(
-                    len(task["negative_pool"]), negative_ratio * len(positive_indices),
+                    len(comparison_pool), negative_ratio * len(positive_indices),
                 )
                 negative_indices = rng.choice(
-                    task["negative_pool"], size=n_negatives, replace=False
+                    comparison_pool, size=n_negatives, replace=False
                 )
                 paired_positive_indices = np.repeat(positive_indices, negative_ratio)[
                     :n_negatives
@@ -326,11 +331,7 @@ def train_all_diseases(
                     )
                     metrics[f"recall@{k}"] = combined_metrics["recall"]
                     metrics[f"ap@{k}"] = combined_metrics["average_precision"]
-                result = {
-                    key: value
-                    for key, value in task.items()
-                    if key != "negative_pool"
-                }
+                result = dict(task)
                 result["metrics"] = metrics
                 if keep_details:
                     result["scores"] = scores
