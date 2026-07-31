@@ -20,7 +20,7 @@ from bioGraph.methods.utils import (disease_edge_counts_for_split,
 DEFAULT_METHODS = (
     "aNBR", "rNBR", "RWR", "DK", "DK*", "QA0", "QA1", "QA*", "DIAMOND"
 )
-ARTIFACT_SCHEMA_VERSION = 7
+ARTIFACT_SCHEMA_VERSION = 8
 
 
 class BasisMatrices(NamedTuple):
@@ -218,7 +218,7 @@ def _score_methods(
     """Calculate only the requested score vectors for one split."""
 
     scores = {}
-    weighted_adjacency = None
+    weighted_adjacency: sparse.csr_matrix | None = None
     if {"QA*", "DK*"} & set(method_set):
         split_counts = disease_edge_counts_for_split(
             graph,
@@ -227,8 +227,13 @@ def _score_methods(
             training_genes,
             nodelist=nodelist,
         )
-        weighted_adjacency = split_counts.copy()
-        weighted_adjacency.data **= hyperparameters["beta"]
+        # Counts omit zero-score edges to remain sparse. Start from a unit-weight
+        # copy of the full graph so every interaction receives (score + 1)^beta.
+        built_adjacency = sparse.csr_matrix(adjacency, copy=True)
+        built_adjacency.data.fill(1.0)
+        built_adjacency = sparse.csr_matrix(built_adjacency + split_counts)
+        built_adjacency.data **= hyperparameters["beta"]
+        weighted_adjacency = built_adjacency
 
     if "QA0" in method_set:
         scores["QA0"] = qa_score(
@@ -248,6 +253,7 @@ def _score_methods(
             nodelist=nodelist,
         )
     if "QA*" in method_set:
+        assert weighted_adjacency is not None
         scores["QA*"] = qa_score(
             graph,
             training_genes,
@@ -265,6 +271,7 @@ def _score_methods(
             nodelist=nodelist,
         )
     if "DK*" in method_set:
+        assert weighted_adjacency is not None
         weighted_degree = np.asarray(weighted_adjacency.sum(axis=1)).ravel()
         weighted_laplacian = sparse.diags(weighted_degree) - weighted_adjacency
         scores["DK*"] = dk_score(

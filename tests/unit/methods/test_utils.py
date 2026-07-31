@@ -38,6 +38,7 @@ def test_disease_relevance_weighted_adjacency_uses_visible_memberships():
     nodelist = [0, 1, 2, 3]
     # The target disease exposes only its current training gene 0. The complete
     # other disease makes edges 0-1 and 1-2 score one; edge 2-3 scores zero.
+    # The +1 baseline keeps the zero-score edge and gives it weight one.
     visible_diseases = {"target": [0], "other": [0, 1, 2]}
 
     weighted = disease_relevance_weighted_adjacency(
@@ -48,10 +49,10 @@ def test_disease_relevance_weighted_adjacency_uses_visible_memberships():
         weighted.toarray(),
         np.asarray(
             [
-                [0, 1, 0, 0],
-                [1, 0, 1, 0],
-                [0, 1, 0, 0],
-                [0, 0, 0, 0],
+                [0, 2, 0, 0],
+                [2, 0, 2, 0],
+                [0, 2, 0, 1],
+                [0, 0, 1, 0],
             ],
             dtype=float,
         ),
@@ -77,5 +78,5 @@ def test_disease_relevance_weighted_adjacency_counts_shared_diseases():
         nodelist=[0, 1],
     )
 
-    assert weighted[0, 1] == 4.0
-    assert weighted[1, 0] == 4.0
+    assert weighted[0, 1] == 9.0
+    assert weighted[1, 0] == 9.0

@@ -78,10 +78,11 @@ def disease_relevance_weighted_adjacency(
     """Return a sparse adjacency weighted by shared disease memberships.
 
     An edge's relevance score is the number of supplied disease sets containing
-    both endpoints, and its weight is ``score ** beta``. Callers must supply only
-    the genes visible for the target disease (for example, the current outer
-    training split); other disease sets may be complete. At ``beta=0``, every
-    existing edge has weight one, including zero-score edges via ``0**0 == 1``.
+    both endpoints, and its weight is ``(score + 1) ** beta``. Callers must
+    supply only the genes visible for the target disease (for example, the
+    current outer training split); other disease sets may be complete. At
+    ``beta=0``, every existing edge has weight one. Zero-score edges retain
+    weight one for every value of ``beta``.
     """
 
     if not np.isfinite(beta) or beta < 0:
@@ -104,9 +105,7 @@ def disease_relevance_weighted_adjacency(
             memberships.get(gene_a, set())
             & memberships.get(gene_b, set())
         )
-        weight = float(score ** beta)
-        if weight == 0.0:
-            continue
+        weight = float((score + 1) ** beta)
         index_a, index_b = node_to_index[gene_a], node_to_index[gene_b]
         rows.extend((index_a, index_b))
         columns.extend((index_b, index_a))

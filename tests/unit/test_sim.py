@@ -83,6 +83,24 @@ def test_benchmark_simulation_supports_sparse_diamond(tmp_path):
     assert np.count_nonzero(scores) <= 3
 
 
+def test_weighted_simulation_beta_zero_retains_zero_score_edges(tmp_path):
+    graph = nx.path_graph(range(6))
+    diseases = {"toy disease": [0, 1]}
+
+    results = run_benchmark_simulation(
+        graph,
+        diseases,
+        tmp_path / "beta-zero.pkl",
+        disease_set=["toy disease"],
+        method_set=["DK", "DK*"],
+        num_runs=1,
+        beta=0.0,
+    )
+
+    scores = results["runs"][0]["scores"]
+    np.testing.assert_allclose(scores["DK*"], scores["DK"])
+
+
 def test_validation_rejects_old_unversioned_artifact():
     with np.testing.assert_raises_regex(ValueError, "Regenerate"):
         validate_benchmark_results({"config": {}, "runs": []})
