@@ -83,6 +83,28 @@ def test_benchmark_simulation_supports_sparse_diamond(tmp_path):
     assert np.count_nonzero(scores) <= 3
 
 
+def test_benchmark_simulation_consumes_supplied_outer_splits(tmp_path):
+    graph = nx.path_graph(range(6))
+    diseases = {"toy disease": list(graph)}
+    outer_splits = {
+        "toy disease": {"train_genes": [0, 2, 4], "test_genes": [1, 3, 5]}
+    }
+
+    results = run_benchmark_simulation(
+        graph,
+        diseases,
+        tmp_path / "shared-split.pkl",
+        disease_set=diseases,
+        method_set=["RWR"],
+        num_runs=1,
+        base_seed=99,
+        outer_splits=outer_splits,
+    )
+
+    assert results["runs"][0]["train_genes"] == [0, 2, 4]
+    assert results["runs"][0]["test_genes"] == [1, 3, 5]
+
+
 def test_weighted_simulation_beta_zero_retains_zero_score_edges(tmp_path):
     graph = nx.path_graph(range(6))
     diseases = {"toy disease": [0, 1]}

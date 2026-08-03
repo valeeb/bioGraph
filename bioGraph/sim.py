@@ -69,6 +69,7 @@ def run_benchmark_simulation(
     beta: float = 0.5,
     diamond_alpha: float = 9,
     diamond_number_to_rank: int = 300,
+    outer_splits: Mapping[str, Mapping[str, Sequence[int]]] | None = None,
 ) -> dict:
     """Run all requested methods on reproducible disease-specific splits.
 
@@ -92,6 +93,8 @@ def run_benchmark_simulation(
         raise ValueError("method_set must not be empty.")
     if num_runs < 1:
         raise ValueError("num_runs must be at least 1.")
+    if outer_splits is not None and num_runs != 1:
+        raise ValueError("outer_splits can only be used with num_runs=1.")
     if not np.isfinite(beta) or beta < 0:
         raise ValueError("beta must be finite and nonnegative.")
 
@@ -132,11 +135,35 @@ def run_benchmark_simulation(
         for run_index in tqdm(range(num_runs), desc="Runs", leave=False):
             split_seed = base_seed + run_index
             known = sorted(set(diseases[disease_name]) & set(graph))
-            split = split_known_genes(
-                known,
-                train_fraction=split_fraction,
-                random_state=split_seed,
-            )
+            if outer_splits is None:
+                split = split_known_genes(
+                    known,
+                    train_fraction=split_fraction,
+                    random_state=split_seed,
+                )
+            else:
+                if disease_name not in outer_splits:
+                    raise ValueError(
+                        f"No outer split supplied for disease {disease_name!r}."
+                    )
+                supplied = outer_splits[disease_name]
+                if set(supplied) != {"train_genes", "test_genes"}:
+                    raise ValueError(
+                        "Each outer split must contain exactly train_genes and "
+                        "test_genes."
+                    )
+                split = {name: list(supplied[name]) for name in supplied}
+                if (
+                    not split["train_genes"]
+                    or not split["test_genes"]
+                    or set(split["train_genes"]) & set(split["test_genes"])
+                    or set(split["train_genes"]) | set(split["test_genes"])
+                    != set(known)
+                ):
+                    raise ValueError(
+                        f"Outer split for {disease_name!r} must be a nonempty, "
+                        "disjoint partition of its known graph genes."
+                    )
             scores = _score_methods(
                 graph,
                 split["train_genes"],

@@ -1,0 +1,14 @@
+name: qdgp
+channels:
+  - defaults
+dependencies:
+  - make
+  - pip
+  - blas[build=*openblas*]
+  - c-compiler
+  - cmake
+  - cxx-compiler
+  - python==3.10
+  - libopenblas[build=*openmp*]
+  - pandas
+prefix: /Users/valentin/opt/anaconda3/envs/qdgp

@@ -32,6 +32,7 @@ outputs/
   reports/                Human-readable result summaries
   results/                Serialized experiment results
 tests/                    Unit, equivalence, and integration tests
+cluster/                  SLURM submission, workers, and result collection
 ```
 
 Run notebooks from the repository root so their project-relative paths resolve
@@ -43,3 +44,6 @@ python -m bioGraph.gcn_prioritization.main --disease-name "breast neoplasms"
 
 Run the fast test suite with `pytest`. See `tests/README.md` for the suite
 structure and marker-specific commands.
+
+For reproducible SLURM array simulations, including the shared outer splits
+used by the classical methods and GCN, see [`cluster/README.md`](cluster/README.md).
