@@ -5,7 +5,10 @@ from pathlib import Path
 
 from bioGraph.data.loading import load_disease_genes, load_ppi_graph
 from bioGraph.evaluation.metrics import mean_reciprocal_rank_at_k, recall_at_k
-from bioGraph.gcn_prioritization.training import train_all_diseases
+from bioGraph.gcn_prioritization.training import (
+    evaluate_all_diseases,
+    train_all_diseases,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,10 +46,9 @@ def main() -> None:
             f"Unknown disease {args.disease_name!r}. Available diseases: {choices}"
         )
 
-    result = train_all_diseases(
+    trained = train_all_diseases(
         graph,
         diseases,
-        k_values=args.k_values,
         hidden_dim=args.hidden_dim,
         disease_embedding_dim=args.disease_embedding_dim,
         epochs=args.epochs,
@@ -56,8 +58,8 @@ def main() -> None:
         train_fraction=args.train_fraction,
         inner_seed_fraction=args.inner_seed_fraction,
         seed=args.seed,
-        keep_details=True,
     )
+    result = evaluate_all_diseases(trained)
     disease_result = result["disease_results"][args.disease_name]
     ranking = disease_result["ranking"]
     test_genes = disease_result["test_genes"]

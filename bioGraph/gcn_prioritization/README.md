@@ -353,6 +353,7 @@ The complete interactive example is
 ```python
 from bioGraph.data.loading import load_disease_genes, load_ppi_graph
 from bioGraph.gcn_prioritization import (
+    evaluate_all_diseases,
     predict_from_seed_genes,
     train_all_diseases,
 )
@@ -360,14 +361,14 @@ from bioGraph.gcn_prioritization import (
 graph = load_ppi_graph("data/processed/subgraph_5377.txt")
 diseases = load_disease_genes("data/raw/pcbi.1004120.s004.txt")
 
-result = train_all_diseases(
+trained = train_all_diseases(
     graph,
     diseases,
     hidden_dim=32,
     disease_embedding_dim=16,
     epochs=100,
-    keep_details=True,
 )
+result = evaluate_all_diseases(trained)
 
 disease_name = "breast neoplasms"
 disease_id = result["disease_to_id"][disease_name]

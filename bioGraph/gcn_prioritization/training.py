@@ -8,7 +8,6 @@ import torch
 from torch.optim import Adam
 
 from bioGraph.data.splitting import split_known_genes, split_training_genes
-from bioGraph.evaluation.metrics import compute_ranking_metrics
 from bioGraph.gcn_prioritization.data import GraphData, make_features, prepare_graph
 from bioGraph.gcn_prioritization.inference import (
     predict_from_seed_genes,
@@ -156,7 +155,6 @@ def train_all_diseases(
     graph: nx.Graph,
     diseases: Mapping[str, Sequence[int]],
     *,
-    k_values: Sequence[int] = (25, 100, 300),
     hidden_dim: int = 32,
     disease_embedding_dim: int = 16,
     epochs: int = 100,
@@ -164,27 +162,26 @@ def train_all_diseases(
     weight_decay: float = 1e-4,
     negative_ratio: int = 5,
     train_fraction: float = 0.75,
-    inner_seed_fraction: float = 2.0 / 3.0,
-    seed: int = 42,
+    inner_seed_fraction: float = 2./3.,
+    seed: int = 0,
     verbose: bool = True,
-    keep_details: bool = False,
     task_batch_size: int = 8,
     outer_splits: Mapping[str, Mapping[str, Sequence[int]]] | None = None,
 ) -> dict:
     """Train one shared GCN across all disease-conditioned ranking tasks.
 
     A sample consists of the shared graph, a disease-specific seed indicator,
-    and a disease ID. Disease tasks are batched, but every task updates the same
+    and a disease ID. Disease tasks are batched (each disease has task_batch_size number of samples), but every task updates the same
     encoder, scorer, and disease-embedding table jointly from initialization.
 
     In physical terms, the graph propagation rule is shared, while each disease
     supplies a different boundary condition through its seed-indicator feature.
+    Call :func:`evaluate_all_diseases` on the returned training state to produce
+    the same complete result formerly returned by this function.
     """
 
     if not diseases:
         raise ValueError("diseases must not be empty.")
-    if not k_values or any(k <= 0 for k in k_values):
-        raise ValueError("k_values must contain positive integers.")
     if epochs < 1:
         raise ValueError("epochs must be at least 1.")
     if negative_ratio < 1:
@@ -200,7 +197,7 @@ def train_all_diseases(
 
     # Construct the fixed outer train/test partition for every disease. Once
     # this is done, training uses only each task's outer-training genes. The
-    # held-out genes are retained solely for the final metric calculation.
+    # held-out genes are retained for evaluation by downstream callers.
     tasks = build_disease_tasks(
         data, diseases, train_fraction, seed, outer_splits
     )
@@ -298,8 +295,36 @@ def train_all_diseases(
         if verbose:
             print(f"Epoch {epoch + 1:>3}/{epochs}: pairwise loss={epoch_loss:.4f}")
 
-    # Evaluate every disease by changing only its seed-indicator input while
-    # keeping the trained propagation rule fixed. No parameters change here.
+    return {
+        "model": model,
+        "disease_to_id": disease_to_id,
+        "graph_data": data,
+        "tasks": tasks,
+        "losses": epoch_losses,
+        "device": str(device),
+        "task_batch_size": task_batch_size,
+    }
+
+
+def evaluate_all_diseases(trained: Mapping) -> dict:
+    """Rank all graph nodes for every disease using a trained shared GCN.
+
+    The returned dictionary intentionally matches the former complete output of
+    :func:`train_all_diseases`, keeping downstream results unchanged while
+    allowing training and inference to be run independently.
+    """
+
+    model = trained["model"]
+    disease_to_id = trained["disease_to_id"]
+    data = trained["graph_data"]
+    tasks = trained["tasks"]
+    task_batch_size = trained["task_batch_size"]
+    device = torch.device(trained["device"])
+    adjacency = data.adjacency.to(device)
+    disease_names = list(tasks)
+
+    # Rank candidates for every disease by changing only its seed-indicator
+    # input while keeping the trained propagation rule fixed.
     model.eval()
     disease_results: dict[str, dict] = {}
     with torch.no_grad():
@@ -321,21 +346,8 @@ def train_all_diseases(
                 task = tasks[disease_name]
                 scores = batch_scores[:, task_column]
                 ranking = ranking_from_scores(scores, data, task["train_genes"])
-                metrics: dict[str, float] = {}
-                for k in k_values:
-                    # Metrics ask how many held-out associations occur near the
-                    # top of the candidate list, where experimental follow-up is
-                    # realistically possible.
-                    combined_metrics = compute_ranking_metrics(
-                        ranking, task["test_genes"], k
-                    )
-                    metrics[f"recall@{k}"] = combined_metrics["recall"]
-                    metrics[f"ap@{k}"] = combined_metrics["average_precision"]
                 result = dict(task)
-                result["metrics"] = metrics
-                if keep_details:
-                    result["scores"] = scores
-                    result["ranking"] = ranking
+                result["ranking"] = ranking
                 disease_results[disease_name] = result
 
     return {
@@ -343,6 +355,6 @@ def train_all_diseases(
         "disease_to_id": disease_to_id,
         "graph_data": data,
         "disease_results": disease_results,
-        "losses": epoch_losses,
+        "losses": trained["losses"],
         "device": str(device),
     }

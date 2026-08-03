@@ -5,6 +5,7 @@ pytest.importorskip("torch")
 from bioGraph.data.splitting import split_known_genes  # noqa: E402
 from bioGraph.gcn_prioritization.model import DiseaseConditionedGCN  # noqa: E402
 from bioGraph.gcn_prioritization.training import (  # noqa: E402
+    evaluate_all_diseases,
     train_all_diseases,
     train_single_disease,
 )
@@ -46,7 +47,7 @@ def test_gcn_consumes_the_exact_shared_split(small_graph):
 def test_all_diseases_jointly_train_one_conditioned_model_without_test_leakage(
     small_graph, disease_genes, disease_outer_splits,
 ):
-    result = train_all_diseases(
+    trained = train_all_diseases(
         small_graph,
         disease_genes,
         epochs=1,
@@ -55,10 +56,11 @@ def test_all_diseases_jointly_train_one_conditioned_model_without_test_leakage(
         negative_ratio=1,
         outer_splits=disease_outer_splits,
         verbose=False,
-        keep_details=True,
     )
 
-    assert isinstance(result["model"], DiseaseConditionedGCN)
+    assert isinstance(trained["model"], DiseaseConditionedGCN)
+    assert "disease_results" not in trained
+    result = evaluate_all_diseases(trained)
     assert set(result) == {
         "model",
         "disease_to_id",
@@ -73,6 +75,9 @@ def test_all_diseases_jointly_train_one_conditioned_model_without_test_leakage(
         disease_result = result["disease_results"][disease]
         assert disease_result["train_genes"] == split["train_genes"]
         assert disease_result["test_genes"] == split["test_genes"]
+        assert disease_result["ranking"]
+        assert "scores" not in disease_result
+        assert "metrics" not in disease_result
 
 
 def test_each_training_run_initializes_a_new_model_for_its_outer_splits(
@@ -94,3 +99,19 @@ def test_each_training_run_initializes_a_new_model_for_its_outer_splits(
     assert next(first["model"].parameters()).data_ptr() != next(
         second["model"].parameters()
     ).data_ptr()
+
+
+def test_evaluation_is_repeatable_and_does_not_mutate_training_state(
+    small_graph, disease_genes, disease_outer_splits,
+):
+    trained = train_all_diseases(
+        small_graph, disease_genes, epochs=1, hidden_dim=4,
+        disease_embedding_dim=3, negative_ratio=1,
+        outer_splits=disease_outer_splits, verbose=False,
+    )
+
+    first = evaluate_all_diseases(trained)
+    second = evaluate_all_diseases(trained)
+
+    assert first["disease_results"] == second["disease_results"]
+    assert "disease_results" not in trained

@@ -1,0 +1,10 @@
+{
+  "epochs": 100,
+  "hidden_dim": 32,
+  "disease_embedding_dim": 16,
+  "learning_rate": 0.01,
+  "weight_decay": 0.0001,
+  "negative_ratio": 5,
+  "inner_seed_fraction": 0.6666666666666666,
+  "task_batch_size": 8
+}

@@ -135,7 +135,10 @@ def run_task(
     else:
         # Keep manifest generation, classical workers, and result collection
         # usable in lightweight login-node environments without PyTorch.
-        from bioGraph.gcn_prioritization.training import train_all_diseases
+        from bioGraph.gcn_prioritization.training import (
+            evaluate_all_diseases,
+            train_all_diseases,
+        )
 
         trained = train_all_diseases(
             graph,
@@ -149,14 +152,18 @@ def run_task(
             inner_seed_fraction=gcn_inner_seed_fraction,
             seed=split_row["seed"],
             verbose=True,
-            keep_details=True,
             task_batch_size=gcn_task_batch_size,
             outer_splits=outer_splits,
         )
+        evaluated = evaluate_all_diseases(trained)
         nodelist = list(trained["graph_data"].nodelist)
         runs = []
         for disease_name in manifest["disease_names"]:
-            disease_result = trained["disease_results"][disease_name]
+            disease_result = evaluated["disease_results"][disease_name]
+            rank_score = {
+                row["gene_id"]: row["score"]
+                for row in disease_result["ranking"]
+            }
             runs.append(
                 {
                     "disease": disease_name,
@@ -164,7 +171,9 @@ def run_task(
                     "train_genes": disease_result["train_genes"],
                     "test_genes": disease_result["test_genes"],
                     "scores": {
-                        "GCN": np.asarray(disease_result["scores"], dtype=float)
+                        "GCN": np.asarray(
+                            [rank_score.get(gene, 0) for gene in nodelist], dtype=float
+                        )
                     },
                 }
             )
@@ -335,19 +344,16 @@ def render_slurm_script(
             f"MANIFEST={q(str(Path(manifest_path).resolve()))}",
             f"SHARD_ROOT={q(str(Path(shard_root).resolve()))}",
             f"PYTHON_COMMAND={q(python_command)}",
-            'SCRATCH_DIR="/scratch/${USER}/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"',
-            'cleanup() { cd /; rm -rf -- "$SCRATCH_DIR"; }',
-            "trap cleanup EXIT",
-            'mkdir -p "$SCRATCH_DIR"',
             'cd "$PROJECT_ROOT"',
             activation,
-            '"$PYTHON_COMMAND" -m cluster.sim run-task \\\n  --manifest "$MANIFEST" \\\n  --group ' + q(group) + ' \\\n  --split-index "$SLURM_ARRAY_TASK_ID" \\\n  --output "$SCRATCH_DIR/result.pkl"' + extra_arguments,
             'SPLIT_NAME=$(printf "split_%03d" "$SLURM_ARRAY_TASK_ID")',
             'DESTINATION="$SHARD_ROOT/$SPLIT_NAME/' + group + '.pkl"',
             'mkdir -p "$(dirname "$DESTINATION")"',
             'TEMP_DESTINATION="${DESTINATION}.${SLURM_JOB_ID}.tmp"',
-            'cp "$SCRATCH_DIR/result.pkl" "$TEMP_DESTINATION"',
+            'trap \'rm -f -- "$TEMP_DESTINATION"\' EXIT',
+            '"$PYTHON_COMMAND" -m cluster.sim run-task \\\n  --manifest "$MANIFEST" \\\n  --group ' + q(group) + ' \\\n  --split-index "$SLURM_ARRAY_TASK_ID" \\\n  --output "$TEMP_DESTINATION"' + extra_arguments,
             'mv "$TEMP_DESTINATION" "$DESTINATION"',
+            "trap - EXIT",
             "",
         ]
     )

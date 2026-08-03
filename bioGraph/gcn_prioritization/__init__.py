@@ -7,12 +7,14 @@ small focused modules.
 
 from bioGraph.gcn_prioritization.inference import predict_from_seed_genes
 from bioGraph.gcn_prioritization.training import (
+    evaluate_all_diseases,
     train_all_diseases,
     train_single_disease,
 )
 
 __all__ = [
     "predict_from_seed_genes",
+    "evaluate_all_diseases",
     "train_all_diseases",
     "train_single_disease",
 ]

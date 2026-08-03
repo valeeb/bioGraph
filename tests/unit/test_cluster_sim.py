@@ -1,9 +1,11 @@
 import pickle
 
 import numpy as np
+import pytest
 
 from bioGraph.sim import ARTIFACT_SCHEMA_VERSION
 from cluster.sim import CLUSTER_SCHEMA_VERSION, collect_results, render_slurm_script
+from cluster.submit import load_gcn_config
 
 
 def _write_pickle(path, value):
@@ -71,7 +73,7 @@ def test_collect_results_merges_groups_using_the_manifest_split(tmp_path):
     assert set(result["runs"][0]["scores"]) == {"RWR", "GCN"}
 
 
-def test_render_slurm_script_uses_array_and_scratch(tmp_path):
+def test_render_slurm_script_uses_array_and_direct_persistent_output(tmp_path):
     script = render_slurm_script(
         project_root=tmp_path,
         manifest_path=tmp_path / "splits.pkl",
@@ -88,6 +90,16 @@ def test_render_slurm_script_uses_array_and_scratch(tmp_path):
 
     assert "#SBATCH --array=0-29" in script
     assert "#SBATCH --partition=standard" in script
-    assert 'SCRATCH_DIR="/scratch/${USER}/' in script
+    assert "/scratch/" not in script
+    assert '--output "$TEMP_DESTINATION"' in script
+    assert 'mv "$TEMP_DESTINATION" "$DESTINATION"' in script
     assert "\n+  --" not in script
     assert "split_%03d" in script
+
+
+def test_load_gcn_config_requires_all_known_hyperparameters(tmp_path):
+    path = tmp_path / "gcn.json"
+    path.write_text('{"epochs": 10}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing keys"):
+        load_gcn_config(path)

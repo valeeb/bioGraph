@@ -12,6 +12,7 @@ def test_gnn_notebook_describes_the_supported_joint_workflow():
     assert notebook["nbformat"] == 4
     assert notebook["metadata"]["kernelspec"]["name"] == "qdgp"
     assert "train_all_diseases(" in source
+    assert "evaluate_all_diseases(" in source
     assert "train_single_disease(" not in source
     assert "disease_id=result['disease_to_id'][disease_name]" in source
     assert not any(cell.get("outputs") for cell in notebook["cells"])
