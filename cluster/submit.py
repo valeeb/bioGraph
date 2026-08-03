@@ -21,7 +21,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-seed", type=int, default=0)
     parser.add_argument("--split-fraction", type=float, default=0.75)
     parser.add_argument("--experiment", default="benchmark")
-    parser.add_argument("--output-root", type=Path, default=root / "outputs" / "results" / "cluster")
+    parser.add_argument(
+        "--output-root", type=Path, default=Path("/disk/data11/tfp/valeeb"),
+        help="persistent cluster storage root (default: /disk/data11/tfp/valeeb)",
+    )
     parser.add_argument("--ppi-path", type=Path, default=root / "data" / "raw" / "PPI202207.txt")
     parser.add_argument("--disease-path", type=Path, default=root / "data" / "raw" / "pcbi.1004120.s004.txt")
     parser.add_argument("-p", "--partition", default="standard")
@@ -29,7 +32,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--memory", default="16G")
     parser.add_argument("--cpus", type=int, default=1)
     parser.add_argument("--account")
-    parser.add_argument("--python", default="python")
+    parser.add_argument(
+        "--python",
+        default="/home/fkp/vleeb/miniconda3/envs/qdgp/bin/python",
+        help="Python interpreter used by worker jobs",
+    )
     parser.add_argument("--gcn-epochs", type=int, default=100)
     parser.add_argument("--gcn-hidden-dim", type=int, default=32)
     parser.add_argument("--gcn-disease-embedding-dim", type=int, default=16)
@@ -113,7 +120,7 @@ def main() -> None:
         print("Not submitted. Use --submit or call sbatch on each script.")
     print("After both arrays finish, collect with:")
     print(
-        f"  python -m cluster.sim collect --manifest {manifest_path} "
+        f"  {args.python} -m cluster.sim collect --manifest {manifest_path} "
         f"--shard-root {shard_root} --output {experiment_root / 'results.pkl'}"
     )
 

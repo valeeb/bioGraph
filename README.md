@@ -47,3 +47,4 @@ structure and marker-specific commands.
 
 For reproducible SLURM array simulations, including the shared outer splits
 used by the classical methods and GCN, see [`cluster/README.md`](cluster/README.md).
+Cluster results default to persistent storage under `/disk/data11/tfp/valeeb`.
