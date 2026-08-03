@@ -18,6 +18,19 @@ def test_validate_outer_split_rejects_overlap():
         )
 
 
+@pytest.mark.parametrize(
+    ("split", "message"),
+    [
+        ({"train_genes": [1, 2]}, "exactly train_genes"),
+        ({"train_genes": [], "test_genes": [1, 2, 3]}, "both be nonempty"),
+        ({"train_genes": [1], "test_genes": [2]}, "partition exactly"),
+    ],
+)
+def test_validate_outer_split_rejects_invalid_partitions(split, message):
+    with pytest.raises(ValueError, match=message):
+        validate_outer_split(split, known_genes=[1, 2, 3])
+
+
 def test_build_tasks_preserves_outer_split_without_a_filtered_negative_pool(
     small_graph, disease_genes, disease_outer_splits
 ):
@@ -42,3 +55,17 @@ def test_comparison_pool_uses_only_inner_training_information(small_graph):
     # Gene 4 can be an outer-test positive, but the pool constructor has no
     # access to that information and therefore treats it like any other node.
     assert 4 in pool_genes
+
+
+def test_build_tasks_counts_known_genes_outside_graph(small_graph):
+    data = prepare_graph(small_graph)
+    tasks = build_disease_tasks(
+        data,
+        {"disease": [1, 2, 3, 99]},
+        2 / 3,
+        4,
+        outer_splits=None,
+    )
+
+    assert tasks["disease"]["known_in_graph"] == 3
+    assert tasks["disease"]["known_not_in_graph"] == 1

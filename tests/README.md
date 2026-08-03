@@ -26,7 +26,12 @@ pytest -m unit
 pytest -m equivalence
 pytest -m integration
 pytest -m "not slow"
+pytest --cov=bioGraph --cov-report=term-missing
 ```
+
+The coverage command requires `pytest-cov`, which is included in the project's
+`environment.yml`. VS Code's **Run Test with Coverage** action uses the same
+plugin.
 
 Tests are automatically marked `unit`, `equivalence`, or `integration` based on
 their containing directory. Use `@pytest.mark.slow` explicitly when needed.

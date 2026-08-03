@@ -34,3 +34,18 @@ def test_load_disease_genes_reads_gene_lists(tmp_path):
 def test_loaders_reject_missing_files(loader, tmp_path):
     with pytest.raises(FileNotFoundError):
         loader(tmp_path / "missing.txt")
+
+
+@pytest.mark.parametrize(
+    ("loader", "contents", "message"),
+    [
+        (load_ppi_graph, "header\ninvalid\n", "No valid interactions"),
+        (load_disease_genes, "disease genes\ninvalid\n", "No disease records"),
+    ],
+)
+def test_loaders_reject_files_without_valid_records(loader, contents, message, tmp_path):
+    path = tmp_path / "empty.txt"
+    path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        loader(path)

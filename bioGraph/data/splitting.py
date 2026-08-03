@@ -8,9 +8,10 @@ import numpy as np
 def _as_unique_array(known_genes: Iterable) -> np.ndarray:
     if hasattr(known_genes, "detach"):
         known_genes = known_genes.detach().cpu().numpy()
-    values = np.asarray(
-        list(known_genes) if isinstance(known_genes, set) else known_genes
-    )
+    # Materialize arbitrary iterables such as generators. Passing a generator
+    # directly to np.asarray creates a scalar object array instead of consuming
+    # its values.
+    values = np.asarray(list(known_genes))
     values = values.reshape(-1)
     if values.size == 0:
         return values

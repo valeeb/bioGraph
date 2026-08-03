@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 from bioGraph.gcn_prioritization.model import (  # noqa: E402
     DiseaseConditionedGCN,
     GCN,
+    GCNEncoder,
 )
 from bioGraph.gcn_prioritization.data import make_features, prepare_graph  # noqa: E402
 
@@ -47,3 +48,50 @@ def test_pairwise_loss_backpropagates_to_disease_embeddings(small_graph):
     torch.nn.functional.softplus(-(scores[1] - scores[4])).backward()
 
     assert model.disease_embeddings.weight.grad[0].abs().sum() > 0
+
+
+def test_encoder_requires_two_input_channels():
+    with pytest.raises(ValueError, match="exactly two inputs"):
+        GCNEncoder(in_channels=3)
+
+
+def test_conditioned_model_requires_at_least_one_disease():
+    with pytest.raises(ValueError, match="at least 1"):
+        DiseaseConditionedGCN(0)
+
+
+def test_encoder_rejects_invalid_feature_dimensions(small_graph):
+    data = prepare_graph(small_graph)
+    with pytest.raises(ValueError, match="x must have shape"):
+        GCNEncoder._propagate(data.adjacency, torch.zeros(6))
+
+
+def test_single_sample_requires_exactly_one_disease_id(small_graph):
+    data = prepare_graph(small_graph)
+    model = DiseaseConditionedGCN(2, hidden_dim=4, dropout=0.0)
+    features = make_features(data, [1])
+
+    with pytest.raises(ValueError, match="requires one disease ID"):
+        model(features, data.adjacency, torch.tensor([0, 1]))
+
+
+def test_task_batch_requires_one_disease_id_per_task(small_graph):
+    data = prepare_graph(small_graph)
+    model = DiseaseConditionedGCN(2, hidden_dim=4, dropout=0.0)
+    features = torch.stack([make_features(data, [1]), make_features(data, [2])], dim=1)
+
+    with pytest.raises(ValueError, match="one disease ID per task"):
+        model(features, data.adjacency, torch.tensor([0]))
+
+
+def test_conditioned_model_rejects_other_feature_dimensions(small_graph):
+    data = prepare_graph(small_graph)
+    model = DiseaseConditionedGCN(2, hidden_dim=4, dropout=0.0)
+
+    class Passthrough(torch.nn.Module):
+        def forward(self, x, adjacency):
+            return x
+
+    with pytest.raises(ValueError, match="two or three dimensions"):
+        model.encoder = Passthrough()
+        model(torch.zeros(6, 1, 1, 2), data.adjacency, torch.tensor([0]))
