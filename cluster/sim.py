@@ -229,6 +229,7 @@ def collect_results(
 
     first = loaded[(0, "classical")]
     nodelist = list(first["nodelist"])
+    canonical_nodes = set(nodelist)
     classical_methods = list(first["config"]["method_set"])
     combined_runs = []
     for disease_name in manifest["disease_names"]:
@@ -236,8 +237,9 @@ def collect_results(
             rows = {}
             for group in METHOD_GROUPS:
                 shard = loaded[(split_index, group)]
-                if list(shard["nodelist"]) != nodelist:
-                    raise ValueError("Shard node orders do not match.")
+                shard_nodelist = list(shard["nodelist"])
+                if set(shard_nodelist) != canonical_nodes:
+                    raise ValueError("Shard node sets do not match.")
                 expected_methods = (
                     classical_methods if group == "classical" else ["GCN"]
                 )
@@ -254,7 +256,20 @@ def collect_results(
                         f"Expected one {group} row for {disease_name!r}, split "
                         f"{split_index}."
                     )
-                rows[group] = matches[0]
+                row = matches[0]
+                if shard_nodelist != nodelist:
+                    source_index = {
+                        node: index for index, node in enumerate(shard_nodelist)
+                    }
+                    order = [source_index[node] for node in nodelist]
+                    row = {
+                        **row,
+                        "scores": {
+                            method: np.asarray(scores)[order]
+                            for method, scores in row["scores"].items()
+                        },
+                    }
+                rows[group] = row
             classical_row, gcn_row = rows["classical"], rows["gcn"]
             expected = split_row["diseases"][disease_name]
             for row in (classical_row, gcn_row):

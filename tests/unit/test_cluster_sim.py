@@ -96,6 +96,17 @@ def test_collect_results_merges_groups_using_the_manifest_split(tmp_path):
     assert set(result["runs"][0]["scores"]) == {"RWR", "GCN"}
 
 
+def test_collect_results_reorders_scores_to_the_classical_node_order(tmp_path):
+    gcn = _shard("GCN", [0.4, 0.3, 0.2, 0.1])
+    gcn["nodelist"] = [4, 3, 2, 1]
+    manifest_path, shard_root = _write_collection(tmp_path, gcn=gcn)
+
+    result = collect_results(manifest_path, shard_root, tmp_path / "results.pkl")
+
+    assert result["nodelist"] == [1, 2, 3, 4]
+    assert result["runs"][0]["scores"]["GCN"].tolist() == [0.1, 0.2, 0.3, 0.4]
+
+
 def test_render_slurm_script_uses_array_and_direct_persistent_output(tmp_path):
     script = render_slurm_script(
         project_root=tmp_path,
@@ -213,7 +224,7 @@ def test_collect_results_reports_missing_shards(tmp_path):
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        ("nodelist", "node orders"),
+        ("nodelist", "node sets"),
         ("methods", "method configuration"),
         ("row_count", "Expected one gcn row"),
         ("seed", "Shard seed"),
@@ -223,7 +234,7 @@ def test_collect_results_reports_missing_shards(tmp_path):
 def test_collect_results_rejects_inconsistent_shards(mutation, message, tmp_path):
     gcn = _shard("GCN", [0.4, 0.3, 0.2, 0.1])
     if mutation == "nodelist":
-        gcn["nodelist"] = [4, 3, 2, 1]
+        gcn["nodelist"] = [1, 2, 3, 5]
     elif mutation == "methods":
         gcn["config"]["method_set"] = ["RWR"]
         gcn["runs"][0]["scores"] = {"RWR": gcn["runs"][0]["scores"].pop("GCN")}

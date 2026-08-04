@@ -59,11 +59,12 @@ The combined result is:
 Use a new experiment name when changing parameters. Do not regenerate an
 experiment's split manifest while its jobs are running.
 
-## Fully explicit submission example
+## Complete submission example
 
-This example shows every input accepted by `cluster/submit.py`. Replace
-`ACCOUNT_NAME` if the cluster requires an account; otherwise remove the
-`--account ACCOUNT_NAME` line.
+This example shows the cluster and data inputs commonly configured for a
+submission. GCN hyperparameters are read from `cluster/gcn_config.json` rather
+than repeated on the command line. Replace `ACCOUNT_NAME` if the cluster
+requires an account; otherwise remove the `--account ACCOUNT_NAME` line.
 
 ```bash
 cd /home/fkp/vleeb/bioGraph
@@ -83,20 +84,12 @@ cd /home/fkp/vleeb/bioGraph
   --account ACCOUNT_NAME \
   --python /home/fkp/vleeb/miniconda3/envs/qdgp/bin/python \
   --gcn-config /home/fkp/vleeb/bioGraph/cluster/gcn_config.json \
-  --gcn-epochs 100 \
-  --gcn-hidden-dim 32 \
-  --gcn-disease-embedding-dim 16 \
-  --gcn-learning-rate 0.01 \
-  --gcn-weight-decay 0.0001 \
-  --gcn-negative-ratio 5 \
-  --gcn-inner-seed-fraction 0.6666666666666666 \
-  --gcn-task-batch-size 8 \
   --environment-command ":" \
   --submit
 ```
 
 Omit `--submit` to generate the split manifest and `.slurm` files without
-submitting them. The individual `--gcn-*` arguments override values read from
-`--gcn-config`; they are shown above only because this example explicitly sets
-every possible input. Run `cluster/submit.py --help` for the command-line
-reference.
+submitting them. `--gcn-config` can also be omitted when using the default
+`cluster/gcn_config.json`. Individual `--gcn-*` arguments remain available for
+one-off overrides, but the config file should normally be updated instead. Run
+`cluster/submit.py --help` for the complete command-line reference.
