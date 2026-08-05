@@ -7,6 +7,7 @@ import os
 import pickle
 import shlex
 import subprocess
+import time
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -23,6 +24,41 @@ from bioGraph.sim import (
 
 CLUSTER_SCHEMA_VERSION = 1
 METHOD_GROUPS = ("classical", "gcn")
+
+
+def _gcn_training_telemetry(
+    losses: Sequence[float],
+    *,
+    split_index: int,
+    seed: int,
+    device: str,
+    training_seconds: float,
+    inference_seconds: float,
+) -> dict:
+    """Build compact, serializable telemetry for one joint GCN fit."""
+
+    epoch_losses = [float(loss) for loss in losses]
+    if not epoch_losses:
+        raise ValueError("GCN training returned no epoch losses.")
+    if not np.all(np.isfinite(epoch_losses)):
+        raise ValueError("GCN training returned a non-finite epoch loss.")
+    best_index = int(np.argmin(epoch_losses))
+    return {
+        "method": "GCN",
+        "split_index": split_index,
+        "seed": seed,
+        "device": device,
+        "epochs_completed": len(epoch_losses),
+        # Position i corresponds to epoch i + 1.
+        "epoch_losses": epoch_losses,
+        "initial_loss": epoch_losses[0],
+        "final_loss": epoch_losses[-1],
+        "best_loss": epoch_losses[best_index],
+        "best_epoch": best_index + 1,
+        "training_seconds": float(training_seconds),
+        "inference_seconds": float(inference_seconds),
+        "total_seconds": float(training_seconds + inference_seconds),
+    }
 
 
 def _dump_pickle(value: object, path: str | Path) -> None:
@@ -140,6 +176,7 @@ def run_task(
             train_all_diseases,
         )
 
+        training_started = time.perf_counter()
         trained = train_all_diseases(
             graph,
             diseases,
@@ -155,7 +192,18 @@ def run_task(
             task_batch_size=gcn_task_batch_size,
             outer_splits=outer_splits,
         )
+        training_seconds = time.perf_counter() - training_started
+        inference_started = time.perf_counter()
         evaluated = evaluate_all_diseases(trained)
+        inference_seconds = time.perf_counter() - inference_started
+        training_telemetry = _gcn_training_telemetry(
+            trained["losses"],
+            split_index=split_index,
+            seed=split_row["seed"],
+            device=str(trained["device"]),
+            training_seconds=training_seconds,
+            inference_seconds=inference_seconds,
+        )
         nodelist = list(trained["graph_data"].nodelist)
         runs = []
         for disease_name in manifest["disease_names"]:
@@ -198,6 +246,7 @@ def run_task(
             },
             "nodelist": nodelist,
             "runs": runs,
+            "training_telemetry": [training_telemetry],
         }
         validate_benchmark_results(result)
         _dump_pickle(result, output_path)
@@ -232,6 +281,16 @@ def collect_results(
     canonical_nodes = set(nodelist)
     classical_methods = list(first["config"]["method_set"])
     combined_runs = []
+    training_telemetry = []
+    for split_index in range(manifest["num_splits"]):
+        shard_telemetry = loaded[(split_index, "gcn")].get(
+            "training_telemetry", []
+        )
+        if len(shard_telemetry) > 1:
+            raise ValueError(
+                f"Expected at most one GCN telemetry row for split {split_index}."
+            )
+        training_telemetry.extend(shard_telemetry)
     for disease_name in manifest["disease_names"]:
         for split_index, split_row in enumerate(manifest["splits"]):
             rows = {}
@@ -309,6 +368,7 @@ def collect_results(
         },
         "nodelist": nodelist,
         "runs": combined_runs,
+        "training_telemetry": training_telemetry,
     }
     validate_benchmark_results(result)
     _dump_pickle(result, output_path)

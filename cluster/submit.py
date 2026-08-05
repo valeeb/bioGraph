@@ -12,7 +12,12 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cluster.sim import create_split_manifest, render_slurm_script, submit_scripts
+from cluster.sim import (
+    _validated_manifest,
+    create_split_manifest,
+    render_slurm_script,
+    submit_scripts,
+)
 
 
 GCN_CONFIG_KEYS = {
@@ -70,6 +75,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--split-fraction", type=float, default=0.75)
     parser.add_argument("--experiment", default="benchmark")
     parser.add_argument(
+        "--reuse-splits", action="store_true",
+        help=(
+            "reuse the experiment's existing splits.pkl without modifying it; "
+            "the array size is read from the manifest"
+        ),
+    )
+    parser.add_argument(
+        "--gcn-only", action="store_true",
+        help="generate and optionally submit only the GCN array",
+    )
+    parser.add_argument(
         "--output-root", type=Path, default=Path("/disk/data11/tfp/valeeb"),
         help="persistent cluster storage root (default: /disk/data11/tfp/valeeb)",
     )
@@ -126,16 +142,28 @@ def main() -> None:
         json.dumps(gcn_config, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     manifest_path = experiment_root / "splits.pkl"
-    create_split_manifest(
-        args.ppi_path,
-        args.disease_path,
-        manifest_path,
-        num_splits=args.num_splits,
-        split_fraction=args.split_fraction,
-        base_seed=args.base_seed,
-    )
+    if args.reuse_splits:
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"Cannot reuse splits: manifest does not exist: {manifest_path}"
+            )
+        manifest = _validated_manifest(manifest_path)
+        num_splits = manifest["num_splits"]
+        print(f"Reusing {num_splits} existing splits (manifest left unchanged): "
+              f"{manifest_path}")
+    else:
+        create_split_manifest(
+            args.ppi_path,
+            args.disease_path,
+            manifest_path,
+            num_splits=args.num_splits,
+            split_fraction=args.split_fraction,
+            base_seed=args.base_seed,
+        )
+        num_splits = args.num_splits
     scripts = []
-    for group in ("classical", "gcn"):
+    groups = ("gcn",) if args.gcn_only else ("classical", "gcn")
+    for group in groups:
         path = script_root / f"{group}.slurm"
         worker_arguments = []
         if group == "gcn":
@@ -158,7 +186,7 @@ def main() -> None:
                 shard_root=shard_root,
                 log_root=log_root,
                 group=group,
-                num_splits=args.num_splits,
+                num_splits=num_splits,
                 partition=args.partition,
                 time_limit=args.time,
                 memory=args.memory,
@@ -171,7 +199,8 @@ def main() -> None:
             encoding="utf-8",
         )
         scripts.append(path)
-    print(f"Created shared splits: {manifest_path}")
+    if not args.reuse_splits:
+        print(f"Created shared splits: {manifest_path}")
     print("Created SLURM arrays:")
     for script in scripts:
         print(f"  {script}")
@@ -180,7 +209,10 @@ def main() -> None:
             print(f"Submitted {script.stem}: job {job_id}")
     else:
         print("Not submitted. Use --submit or call sbatch on each script.")
-    print("After both arrays finish, collect with:")
+    if args.gcn_only:
+        print("After the GCN array finishes, collect with the existing classical shards:")
+    else:
+        print("After both arrays finish, collect with:")
     print(
         f"  {args.python} -m cluster.sim collect --manifest {manifest_path} "
         f"--shard-root {shard_root} --output {experiment_root / 'results.pkl'}"

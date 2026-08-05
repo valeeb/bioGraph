@@ -59,6 +59,29 @@ The combined result is:
 Use a new experiment name when changing parameters. Do not regenerate an
 experiment's split manifest while its jobs are running.
 
+## Rerun only the GCN on existing splits
+
+Use ``--reuse-splits --gcn-only`` to rebuild the GCN array from the current
+``gcn_config.json`` without writing the experiment's existing ``splits.pkl``.
+The number of array tasks is read from that manifest, so an existing 50-split
+experiment produces array indices 0--49 automatically:
+
+```bash
+cd /home/fkp/vleeb/bioGraph
+
+/home/fkp/vleeb/miniconda3/envs/qdgp/bin/python cluster/submit.py \
+  --experiment YOUR_EXPERIMENT \
+  --output-root /disk/data11/tfp/valeeb \
+  --gcn-config /home/fkp/vleeb/bioGraph/cluster/gcn_config.json \
+  --reuse-splits \
+  --gcn-only \
+  --submit
+```
+
+This regenerates only ``slurm/gcn.slurm`` and replaces completed GCN shards;
+the split manifest and classical shards are left unchanged. Omit ``--submit``
+to inspect the generated script before submitting it.
+
 ## Complete submission example
 
 This example shows the cluster and data inputs commonly configured for a

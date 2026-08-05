@@ -1,4 +1,5 @@
 import pickle
+import sys
 from copy import deepcopy
 from subprocess import CompletedProcess
 
@@ -96,6 +97,53 @@ def test_collect_results_merges_groups_using_the_manifest_split(tmp_path):
     assert set(result["runs"][0]["scores"]) == {"RWR", "GCN"}
 
 
+def test_collect_results_preserves_gcn_training_telemetry(tmp_path):
+    gcn = _shard("GCN", [0.4, 0.3, 0.2, 0.1])
+    telemetry = {
+        "method": "GCN",
+        "split_index": 0,
+        "seed": 3,
+        "epoch_losses": [0.8, 0.5],
+        "epochs_completed": 2,
+    }
+    gcn["training_telemetry"] = [telemetry]
+    manifest_path, shard_root = _write_collection(tmp_path, gcn=gcn)
+
+    result = collect_results(manifest_path, shard_root, tmp_path / "results.pkl")
+
+    assert result["training_telemetry"] == [telemetry]
+
+
+def test_gcn_training_telemetry_summarizes_epoch_losses():
+    telemetry = cluster_sim._gcn_training_telemetry(
+        [0.9, 0.4, 0.5],
+        split_index=2,
+        seed=7,
+        device="cpu",
+        training_seconds=10.0,
+        inference_seconds=2.5,
+    )
+
+    assert telemetry["epoch_losses"] == [0.9, 0.4, 0.5]
+    assert telemetry["epochs_completed"] == 3
+    assert telemetry["best_epoch"] == 2
+    assert telemetry["best_loss"] == 0.4
+    assert telemetry["final_loss"] == 0.5
+    assert telemetry["total_seconds"] == 12.5
+
+
+def test_gcn_training_telemetry_rejects_non_finite_losses():
+    with pytest.raises(ValueError, match="non-finite"):
+        cluster_sim._gcn_training_telemetry(
+            [0.9, np.nan],
+            split_index=0,
+            seed=3,
+            device="cpu",
+            training_seconds=1.0,
+            inference_seconds=0.1,
+        )
+
+
 def test_collect_results_reorders_scores_to_the_classical_node_order(tmp_path):
     gcn = _shard("GCN", [0.4, 0.3, 0.2, 0.1])
     gcn["nodelist"] = [4, 3, 2, 1]
@@ -137,6 +185,56 @@ def test_load_gcn_config_requires_all_known_hyperparameters(tmp_path):
 
     with pytest.raises(ValueError, match="missing keys"):
         load_gcn_config(path)
+
+
+def test_submit_reuses_manifest_unchanged_and_generates_only_gcn(
+    monkeypatch, tmp_path
+):
+    experiment_root = tmp_path / "existing"
+    manifest_path = experiment_root / "splits.pkl"
+    manifest = _manifest()
+    manifest["num_splits"] = 2
+    manifest["splits"] = [
+        {**manifest["splits"][0], "split_index": index, "seed": 3 + index}
+        for index in range(2)
+    ]
+    _write_pickle(manifest_path, manifest)
+    original_manifest_bytes = manifest_path.read_bytes()
+    config_path = tmp_path / "gcn.json"
+    config_path.write_text(
+        """{
+          "epochs": 20,
+          "hidden_dim": 64,
+          "disease_embedding_dim": 32,
+          "learning_rate": 0.001,
+          "weight_decay": 0.0001,
+          "negative_ratio": 10,
+          "inner_seed_fraction": 0.6666666666666666,
+          "task_batch_size": 16
+        }""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cluster/submit.py",
+            "--output-root", str(tmp_path),
+            "--experiment", "existing",
+            "--gcn-config", str(config_path),
+            "--reuse-splits",
+            "--gcn-only",
+        ],
+    )
+
+    cluster_submit.main()
+
+    assert manifest_path.read_bytes() == original_manifest_bytes
+    assert not (experiment_root / "slurm" / "classical.slurm").exists()
+    script = (experiment_root / "slurm" / "gcn.slurm").read_text()
+    assert "#SBATCH --array=0-1" in script
+    assert "--gcn-epochs \\\n  20" in script
+    assert "--gcn-hidden-dim \\\n  64" in script
 
 
 def test_create_split_manifest_is_reproducible(monkeypatch, tmp_path):
