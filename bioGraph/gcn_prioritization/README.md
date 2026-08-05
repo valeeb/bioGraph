@@ -76,7 +76,7 @@ This logic lives in [`data.py`](data.py).
 
 ## 2. Shared GCN encoder
 
-The encoder applies two graph-propagation steps. In schematic form,
+The encoder applies four graph-propagation steps. In schematic form,
 
 $$
 H_d^{(1)} = \operatorname{Dropout}\!\left[
@@ -85,16 +85,18 @@ H_d^{(1)} = \operatorname{Dropout}\!\left[
 $$
 
 $$
-U_d^{(2)} = \operatorname{Dropout}\!\left[
-  \operatorname{ReLU}(\tilde A H_d^{(1)} W_2 + b_2)
+U_d^{(l)} = \operatorname{Dropout}\!\left[
+  \operatorname{ReLU}(\tilde A H_d^{(l-1)} W_l + b_l)
 \right],
 \qquad
-H_d = H_d^{(1)} + U_d^{(2)}.
+H_d^{(l)} = H_d^{(l-1)} + U_d^{(l)},
+\quad l \in \{2,3,4\},
 $$
 
-The final addition is a residual connection. It gives the model access to both
-the first propagation result and its two-step update, and also helps gradients
-flow through the network during optimization.
+Each of the final three layers has a residual connection. This preserves
+representations from shallower propagation depths and helps gradients flow
+through the network during optimization. The encoder output is
+$H_d = H_d^{(4)}$.
 
 The row $h_{i,d}$ of $H_d$ is the hidden representation of gene $i$ for
 disease task $d$.

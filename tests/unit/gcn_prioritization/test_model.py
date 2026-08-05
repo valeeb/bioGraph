@@ -55,6 +55,18 @@ def test_encoder_requires_two_input_channels():
         GCNEncoder(in_channels=3)
 
 
+def test_encoder_has_four_hidden_graph_layers():
+    encoder = GCNEncoder(hidden_dim=4)
+
+    graph_layers = [
+        module for module in encoder.modules() if isinstance(module, torch.nn.Linear)
+    ]
+
+    assert len(graph_layers) == 4
+    assert graph_layers[0].in_features == 2
+    assert all(layer.out_features == 4 for layer in graph_layers)
+
+
 def test_conditioned_model_requires_at_least_one_disease():
     with pytest.raises(ValueError, match="at least 1"):
         DiseaseConditionedGCN(0)

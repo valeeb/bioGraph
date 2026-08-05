@@ -8,7 +8,7 @@ from bioGraph.gcn_prioritization.data import GraphData, make_features, prepare_g
 
 
 class GCNEncoder(nn.Module):
-    """Shared graph encoder producing one hidden representation per node."""
+    """Four-layer graph encoder producing one representation per node."""
 
     def __init__(
         self, in_channels: int = 2, hidden_dim: int = 32, dropout: float = 0.2
@@ -20,6 +20,8 @@ class GCNEncoder(nn.Module):
             )
         self.linear1 = nn.Linear(in_channels, hidden_dim)
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        self.linear3 = nn.Linear(hidden_dim, hidden_dim)
+        self.linear4 = nn.Linear(hidden_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
     @staticmethod
@@ -41,10 +43,11 @@ class GCNEncoder(nn.Module):
         hidden = self._propagate(adjacency, x)
         hidden = self.dropout(torch.relu(self.linear1(hidden)))
 
-        # Propagation 2 retains hidden width, so the residual is valid.
-        update = self._propagate(adjacency, hidden)
-        update = self.dropout(torch.relu(self.linear2(update)))
-        hidden = hidden + update
+        # Propagations 2--4 retain hidden width, so residuals are valid.
+        for linear in (self.linear2, self.linear3, self.linear4):
+            update = self._propagate(adjacency, hidden)
+            update = self.dropout(torch.relu(linear(update)))
+            hidden = hidden + update
 
         return hidden
 
