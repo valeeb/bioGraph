@@ -10,3 +10,6 @@ htmlcov/
 # Local datasets and generated experiment results
 data/processed
 outputs/results/
+
+#files which should not by public
+cluster/README.md
